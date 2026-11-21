@@ -148,10 +148,12 @@
         </div>
         <div class="tab-body" data-body="people">
           <ul class="people" id="people"></ul>
-          <div class="voice-tip">
+          <label class="voice-tip ear-mode">
             <svg><use href="#i-headset"/></svg>
-            <p>Wear earphones in voice chat so the movie doesn't echo back to your friends.</p>
-          </div>
+            <p><b>Earphones mode</b><br>Keeps the movie's full sound (music, bass) while you're in voice. Turn on only
+              with earphones — on a speaker your friends would hear your movie through your mic.</p>
+            <input type="checkbox" class="switch" id="earMode" aria-label="Earphones mode">
+          </label>
         </div>
         <div class="tab-body" data-body="movies">
           <div class="movies-head">

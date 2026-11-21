@@ -249,6 +249,15 @@ then tap ↻ in the **Movies** tab — the app switches to the optimized version
 </details>
 
 <details>
+<summary><b>The movie sounds thinner (louder voices, less music) after joining voice</b></summary>
+
+With echo cancelling on, phones switch to "phone call" audio while the mic is open, which boosts voices and squashes
+music and bass. Wearing earphones? Open **People** and turn on **Earphones mode**: the mic runs without call
+processing and the movie keeps its normal sound. Leave it off when using the phone speaker, or your friends will
+hear your movie through your mic.
+</details>
+
+<details>
 <summary><b>The mic button does nothing</b></summary>
 
 Browsers only allow the microphone on `https://`. Use the tunnel link, not the `http://192.168…` LAN link.

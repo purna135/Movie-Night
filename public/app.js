@@ -39,7 +39,7 @@
     messages: $('#messages'), typing: $('#typing'), people: $('#people'), movies: $('#movies'), moviesCount: $('#moviesCount'),
     refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), sendBtn: $('#sendBtn'), kbFloat: $('#kbFloat'), kbReacts: $('#kbReacts'), quickReacts: $('#quickReacts'),
     modal: $('#modal'), modalTitle: $('#modalTitle'), modalText: $('#modalText'), modalOk: $('#modalOk'), modalCancel: $('#modalCancel'),
-    audioSink: $('#audioSink'),
+    audioSink: $('#audioSink'), earMode: $('#earMode'),
   };
   const video = el.video;
   const REACTS = ['😂', '😮', '😍', '🔥', '👏', '😭', '💀', '🍿'];
@@ -1165,9 +1165,7 @@
       return;
     }
     try {
-      voice.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-      });
+      voice.stream = await navigator.mediaDevices.getUserMedia(micConstraints());
     } catch (err) {
       const msg = {
         NotAllowedError: '🎙  Microphone permission is blocked — allow it in the browser’s site settings',
@@ -1183,7 +1181,51 @@
     addMeter('me', voice.stream);
     socket.emit('voice-join');
     renderVoice();
-    toast('🎧  You joined voice');
+    if (isTouch && !earphones() && !store.get('earHint', false)) {
+      store.set('earHint', true);
+      toast('🎧  In voice. Wearing earphones? Turn on Earphones mode in People for full movie sound');
+    } else {
+      toast('🎧  You joined voice');
+    }
+  }
+
+  // ---- Earphones mode ----
+  // With echo cancelling on, Android (and iOS) put the whole phone into "phone call" audio while the
+  // mic is open: voices get boosted and the movie's music and bass get squashed. Echo cancelling is
+  // only needed when the movie plays from a speaker (so it doesn't leak into the mic) — with
+  // earphones it can be off, and the movie keeps its normal sound.
+  const earphones = () => store.get('earphones', false) === true;
+  function micConstraints() {
+    const call = !earphones();
+    return { audio: { echoCancellation: call, noiseSuppression: call, autoGainControl: call, channelCount: 1 } };
+  }
+  el.earMode.checked = earphones();
+  el.earMode.addEventListener('change', async () => {
+    store.set('earphones', el.earMode.checked);
+    if (voice.active) await swapMic();
+    toast(el.earMode.checked ? '🎧  Earphones mode on — full movie sound' : '🔈  Earphones mode off — echo cancelling on');
+  });
+
+  // Re-open the mic with the new settings and hand the new track to every friend's connection.
+  async function swapMic() {
+    // Release the old mic first: the phone only leaves call audio once no echo-cancelled mic is open.
+    voice.stream?.getTracks().forEach((t) => t.stop());
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+    } catch {
+      toast('Couldn’t restart the microphone — rejoin voice');
+      return leaveVoice();
+    }
+    if (!voice.active) { stream.getTracks().forEach((t) => t.stop()); return; } // left voice meanwhile
+    voice.stream = stream;
+    const track = stream.getAudioTracks()[0];
+    track.enabled = !voice.muted;
+    voice.peers.forEach((p) => p.pc.getSenders().forEach((s) => {
+      if (s.track?.kind === 'audio') s.replaceTrack(track).catch(() => {});
+    }));
+    if (relay.capture) { stopRelayCapture(); startRelayCapture(); }
+    addMeter('me', stream);
   }
 
   function rejoinVoice() {

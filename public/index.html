@@ -46,7 +46,7 @@
       <p class="tagline">Same movie, same second — wherever you are.</p>
       <label class="field">
         <span>Your name</span>
-        <input id="nameInput" maxlength="24" autocomplete="nickname" placeholder="e.g. Sam" required>
+        <input id="nameInput" maxlength="24" autocomplete="nickname" placeholder="Muskuuu" required>
       </label>
       <label class="field" id="codeField">
         <span>Room passcode</span>
@@ -161,13 +161,15 @@
           <ul class="movies" id="movies"></ul>
         </div>
 
-        <form class="composer" id="composer" autocomplete="off">
+        <!-- Not a <form> and a <textarea>: stops Chrome's password/card/address bar above the keyboard -->
+        <div class="composer" id="composer">
           <div class="quick-reacts" id="quickReacts"></div>
           <div class="compose-row">
-            <input id="msgInput" maxlength="600" placeholder="Say something…" enterkeyhint="send" autocomplete="off">
-            <button class="send" type="submit" id="sendBtn" title="Send"><svg><use href="#i-send"/></svg></button>
+            <textarea id="msgInput" rows="1" maxlength="600" placeholder="Say something…" enterkeyhint="send"
+              autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message"></textarea>
+            <button class="send" type="button" id="sendBtn" title="Send"><svg><use href="#i-send"/></svg></button>
           </div>
-        </form>
+        </div>
       </aside>
     </main>
   </div>

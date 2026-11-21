@@ -288,6 +288,20 @@ setInterval(() => {
   if (room.playing && users.size) io.emit('sync', snapshot());
 }, 3000);
 
+// When `npm run optimize` finishes (or a movie is added) while people are watching, push the new
+// library so everyone switches to the adaptive stream without tapping refresh.
+let librarySig = '';
+setInterval(() => {
+  if (!users.size) return;
+  const list = movies();
+  const sig = list.map((m) => `${m.id}|${m.hls ? 1 : 0}|${m.subs.length}`).join('\n');
+  if (librarySig && sig !== librarySig) {
+    io.emit('movies', list);
+    if (list.some((m) => m.id === room.movie && m.hls)) console.log('⚡ Optimized version ready — viewers switched to adaptive quality.');
+  }
+  librarySig = sig;
+}, 10000);
+
 // ---------- Startup ----------
 function lanAddress() {
   for (const list of Object.values(os.networkInterfaces())) {

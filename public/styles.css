@@ -344,10 +344,14 @@ video::cue { background: rgba(0,0,0,.6); color: #fff; font-family: var(--font); 
 .quick-reacts button:hover { background: var(--surface-2); }
 .compose-row { display: flex; gap: 8px; }
 #msgInput {
-  flex: 1; min-width: 0; height: 46px; padding: 0 18px; border-radius: 999px;
-  background: var(--surface); border: 1px solid var(--border-2); outline: none; font-size: 16px;
+  flex: 1; min-width: 0; height: 46px; max-height: 110px; padding: 12px 18px; border-radius: 23px;
+  background: var(--surface); border: 1px solid var(--border-2); outline: none;
+  font: inherit; font-size: 16px; line-height: 20px; color: var(--text);
+  resize: none; overflow-y: auto; display: block; scrollbar-width: none;
   transition: border-color .2s, background .2s;
 }
+#msgInput::-webkit-scrollbar { display: none; }
+.compose-row { align-items: flex-end; }
 #msgInput:focus { border-color: rgba(255,138,61,.6); background: var(--surface-2); }
 .send { flex: none; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--grad); color: #1a0d05; transition: transform .15s, opacity .2s; }
 .send:active { transform: scale(.9); }
@@ -523,3 +527,16 @@ video::cue { background: rgba(0,0,0,.6); color: #fff; font-family: var(--font); 
 .menu.sheet::before { content: ""; display: block; width: 40px; height: 4px; border-radius: 4px; background: rgba(255,255,255,.25); margin: 4px auto 8px; }
 .menu.sheet button { padding: 14px 14px; font-size: 15.5px; }
 @keyframes sheetUp { from { transform: translateY(100%); } }
+
+/* Typing on an upright phone: the keyboard leaves ~350–400px, so shrink the video to a mini
+   player and hide the tabs + player controls until the keyboard closes. */
+@media (max-width: 599px) {
+  .app.kb-open:not(.immersive) .player {
+    aspect-ratio: auto;
+    height: clamp(110px, calc(var(--app-h, 100dvh) * 0.32), 240px);
+  }
+  .app.kb-open:not(.immersive) .controls,
+  .app.kb-open:not(.immersive) .panel-head,
+  .app.kb-open:not(.immersive) .ticker { display: none; }
+  .app.kb-open:not(.immersive) .messages { padding-top: 6px; }
+}

@@ -248,5 +248,5 @@ async function optimize(rel, encoder) {
       if (encoder !== 'libx264') console.log('    Try again with:  npm run optimize -- --cpu');
     }
   }
-  console.log('\nAll done. In the app, open Movies and tap refresh — the optimized version is used automatically.');
+  console.log('\nAll done. If the server is running, everyone switches to the optimized version automatically within ~10 s.');
 })();

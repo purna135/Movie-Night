@@ -37,7 +37,7 @@
     fsBtn: $('#fsBtn'), menu: $('#menu'), toast: $('#toast'), subs: $('#subs'),
     panel: $('#panel'), panelClose: $('#panelClose'), chatBadge: $('#chatBadge'), peopleCount: $('#peopleCount'),
     messages: $('#messages'), typing: $('#typing'), people: $('#people'), movies: $('#movies'), moviesCount: $('#moviesCount'),
-    refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), quickReacts: $('#quickReacts'),
+    refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), sendBtn: $('#sendBtn'), quickReacts: $('#quickReacts'),
     modal: $('#modal'), modalTitle: $('#modalTitle'), modalText: $('#modalText'), modalOk: $('#modalOk'), modalCancel: $('#modalCancel'),
     audioSink: $('#audioSink'),
   };
@@ -735,14 +735,33 @@
   // Fullscreen / immersive (landscape phones get an overlay chat drawer)
   const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
   const landscapeMQ = matchMedia('(orientation: landscape) and (max-height: 520px)');
+  const isTyping = () => document.activeElement === el.msgInput;
+  // Is a *phone* physically held sideways? Ask the device, not the viewport: when the keyboard opens
+  // on an upright Android phone the viewport becomes e.g. 412×400 ("landscape"), which used to
+  // switch to the full-screen layout and hide the chat box behind the keyboard.
+  function phoneHeldSideways() {
+    if (!isTouch) return false;
+    const type = screen.orientation && screen.orientation.type;
+    if (type) return type.startsWith('landscape') && Math.min(screen.width, screen.height) <= 600;
+    if (typeof window.orientation === 'number') return Math.abs(window.orientation) === 90; // older iOS
+    return false;
+  }
+  // The keyboard only changes the viewport *height*; rotating the phone changes the *width*.
+  // So "typing + same width as in portrait" means the keyboard is open, not that the phone turned.
+  let portraitWidth = 0;
   function updateImmersive() {
-    const imm = !!fsElement() || el.app.classList.contains('pseudo-fs') || landscapeMQ.matches;
+    const keyboardOpen = isTouch && isTyping() && portraitWidth && Math.abs(innerWidth - portraitWidth) < 2;
+    const sideways = !keyboardOpen && (phoneHeldSideways() || landscapeMQ.matches);
+    const imm = !!fsElement() || el.app.classList.contains('pseudo-fs') || sideways;
+    if (!imm) portraitWidth = innerWidth;
     el.app.classList.toggle('immersive', imm);
     if (!imm) el.app.classList.remove('chat-open');
     setIcon(el.fsBtn, fsElement() || el.app.classList.contains('pseudo-fs') ? 'i-shrink' : 'i-expand');
     updateUnread();
   }
   landscapeMQ.addEventListener?.('change', updateImmersive);
+  screen.orientation?.addEventListener?.('change', updateImmersive);
+  addEventListener('orientationchange', () => setTimeout(updateImmersive, 150));
   document.addEventListener('fullscreenchange', updateImmersive);
   document.addEventListener('webkitfullscreenchange', updateImmersive);
 
@@ -920,21 +939,37 @@
     typingTimer = setTimeout(() => { el.typing.hidden = true; }, 3000);
   }
   let lastTypingSent = 0;
+  // Grow the message box up to ~4 lines, then scroll inside it.
+  function autoGrow() {
+    el.msgInput.style.height = 'auto';
+    el.msgInput.style.height = `${Math.min(el.msgInput.scrollHeight, 110)}px`;
+  }
   el.msgInput.addEventListener('input', () => {
+    autoGrow();
     if (Date.now() - lastTypingSent > 2500 && el.msgInput.value.trim()) {
       lastTypingSent = Date.now();
       socket?.emit('typing');
     }
   });
 
-  el.composer.addEventListener('submit', (e) => {
-    e.preventDefault();
+  function sendMessage() {
     const text = el.msgInput.value.trim();
     if (!text || !socket) return;
     socket.emit('chat', { text });
     el.msgInput.value = '';
+    autoGrow();
     el.typing.hidden = true;
+  }
+  // Enter sends; Shift+Enter adds a new line (ignored while an IME is composing, e.g. Hindi keyboards)
+  el.msgInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      sendMessage();
+    }
   });
+  // Keep the keyboard open when tapping Send on a phone
+  el.sendBtn.addEventListener('pointerdown', (e) => e.preventDefault());
+  el.sendBtn.addEventListener('click', sendMessage);
 
   function renderPeople() {
     el.peopleCount.textContent = users.length;
@@ -1221,6 +1256,7 @@
     document.documentElement.style.setProperty('--app-h', `${h}px`);
     const top = vv ? Math.max(0, Math.round(vv.offsetTop)) : 0;
     el.app.style.transform = top ? `translateY(${top}px)` : '';
+    updateImmersive();
     const typing = isTouch && document.activeElement === el.msgInput;
     if (el.app.classList.contains('kb-open') !== typing) {
       el.app.classList.toggle('kb-open', typing);

@@ -75,7 +75,8 @@ npm run optimize
 
 This converts it once into 720p / 480p / 360p / 240p streams that every phone can play
 (HEVC, 10-bit, MKV, AC3/DTS audio are all handled). Expect roughly **5–10× real time with a GPU**,
-e.g. ~20 min for a 2.5 h film on an Intel laptop iGPU.
+e.g. ~25 min for a 2h45m film on an Intel laptop iGPU. Already watching? You can start the room
+before it finishes — everyone switches to the optimized version automatically when it's ready.
 
 ### 3. Start the room
 

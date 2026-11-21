@@ -5,7 +5,7 @@
 //   npm run optimize                       -> every movie in ./movies not yet optimized
 //   npm run optimize -- "D:\Movies"        -> every movie in that folder
 //   npm run optimize -- "D:\Movies\x.mkv"  -> just that file
-//   add --force to rebuild, --cpu to skip GPU encoders
+//   add --force to rebuild (safe while people are watching), --cpu to skip GPU encoders
 
 const { spawn, spawnSync } = require('child_process');
 const path = require('path');
@@ -167,6 +167,9 @@ function run(argv, duration, label) {
   });
 }
 
+// Each build goes into its own folder (prepared/<movie>/b<timestamp>/) and ready.json is switched to it
+// only once it's complete. So re-optimizing never interrupts people who are watching the current
+// version, and the new folder name means phones never mix cached old segments with new ones.
 async function optimize(rel, encoder) {
   const input = path.join(dir, rel);
   const info = lib.preparedInfo(input);
@@ -175,6 +178,30 @@ async function optimize(rel, encoder) {
     return;
   }
   console.log(`\n▶ ${rel}`);
+
+  // Refuse to run twice on the same movie (two windows would fight over the same folder).
+  const lock = path.join(lib.PREPARED_DIR, `${info.key}.lock`);
+  if (fs.existsSync(lock)) {
+    const pid = Number(fs.readFileSync(lock, 'utf8'));
+    if (pid && pid !== process.pid && alive(pid)) {
+      console.log(`  ⚠ Already being optimized in another window (process ${pid}). Skipping.`);
+      return;
+    }
+  }
+  fs.mkdirSync(info.dir, { recursive: true });
+  fs.writeFileSync(lock, String(process.pid));
+  lockFile = lock;
+  try {
+    // Leftovers of an interrupted run (never made it into ready.json).
+    for (const e of fs.readdirSync(info.dir)) if (/^b\d+$/.test(e) && e !== info.build) removeQuietly(path.join(info.dir, e));
+    await build(input, info, encoder);
+  } finally {
+    fs.rmSync(lock, { force: true });
+    lockFile = null;
+  }
+}
+
+async function build(input, info, encoder) {
   const meta = probe(input);
   const video = meta.streams.find((s) => s.codec_type === 'video' && !s.disposition?.attached_pic);
   if (!video) return console.log('  No video stream, skipping.');
@@ -188,26 +215,10 @@ async function optimize(rel, encoder) {
   let ladder = LADDER.filter((r) => r.w <= (video.width || 1280) + 16);
   if (ladder.length < 2) ladder = LADDER.slice(-2);
 
-  // Refuse to run twice on the same movie (two windows would corrupt the output).
-  const lock = path.join(lib.PREPARED_DIR, `${info.key}.lock`);
-  if (fs.existsSync(lock)) {
-    const pid = Number(fs.readFileSync(lock, 'utf8'));
-    if (pid && pid !== process.pid && alive(pid)) {
-      console.log(`  ⚠ Already being optimized in another window (process ${pid}). Skipping.`);
-      return;
-    }
-  }
-  fs.mkdirSync(lib.PREPARED_DIR, { recursive: true });
-  fs.writeFileSync(lock, String(process.pid));
-  lockFile = lock;
-
-  // Empty (rather than delete) the folder: Windows refuses to delete a folder that is open in
-  // Explorer or a terminal, but emptying it works.
-  fs.mkdirSync(info.dir, { recursive: true });
-  for (const entry of fs.readdirSync(info.dir)) {
-    fs.rmSync(path.join(info.dir, entry), { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
-  }
-  const out = info.dir.replace(/\\/g, '/');
+  const buildId = `b${Date.now()}`;
+  const outDir = path.join(info.dir, buildId);
+  fs.mkdirSync(outDir, { recursive: true });
+  const out = outDir.replace(/\\/g, '/');
 
   const split = ladder.map((_, i) => `[s${i}]`).join('');
   // Downscale once to the top rung, then derive the smaller rungs from that (much cheaper than 4x from 1080p/4K).
@@ -220,18 +231,14 @@ async function optimize(rel, encoder) {
     const outs = ladder.map((_, i) => `[a${i}]`).join('');
     graph += `;[0:${audio.index}]${stereoMix(audio.channels)},alimiter=limit=0.97:level=0,aresample=48000,asplit=${ladder.length}${outs}`;
   }
-  const argv = ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:1',
-    '-hwaccel', 'auto', // GPU decoding when available (big win for HEVC / 10-bit); falls back to CPU
-    '-i', input,
-    '-filter_complex', graph];
+  const argv = ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:1'];
+  if (encoder !== 'libx264') argv.push('-hwaccel', 'auto'); // GPU decoding (big win for HEVC / 10-bit); CPU mode stays pure CPU
+  argv.push('-i', input, '-filter_complex', graph);
   ladder.forEach((r, i) => {
     argv.push('-map', `[v${i}]`, `-c:v:${i}`, encoder, `-b:v:${i}`, `${r.vb}k`,
       `-maxrate:v:${i}`, `${Math.round(r.vb * 1.3)}k`, `-bufsize:v:${i}`, `${r.vb * 2}k`);
   });
-  if (audio) {
-    ladder.forEach((r, i) => argv.push('-map', `[a${i}]`, `-c:a:${i}`, 'aac', `-b:a:${i}`, `${r.ab}k`));
-    argv.push('-ar', '48000');
-  }
+  if (audio) ladder.forEach((r, i) => argv.push('-map', `[a${i}]`, `-c:a:${i}`, 'aac', `-b:a:${i}`, `${r.ab}k`));
   argv.push('-profile:v', 'main', ...ENCODER_OPTS[encoder],
     '-g', String(gop), '-keyint_min', String(gop),
     '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod', '-hls_flags', 'independent_segments',
@@ -240,38 +247,70 @@ async function optimize(rel, encoder) {
     `${out}/%v/index.m3u8`);
 
   console.log(`  ${video.codec_name} ${video.width}x${video.height} · ${fmt(duration)} · encoder ${encoder} · ${ladder.map((r) => r.name).join(', ')}`);
-  await run(argv, duration, 'Encoding');
+  const retryOnCpu = (why) => {
+    console.log(`  ⚠ ${why} Redoing with the CPU encoder…`);
+    removeQuietly(outDir);
+    return build(input, info, 'libx264');
+  };
+  try {
+    await run(argv, duration, 'Encoding');
+  } catch (e) {
+    if (encoder === 'libx264') { removeQuietly(outDir); throw e; }
+    return retryOnCpu(`${encoder} failed (${String(e.message).trim().split('\n').pop()}).`);
+  }
 
   // A 2h movie should give ~1800 four-second segments. If an encoder ignored the keyframe
   // settings we'd get a handful of giant segments — useless on slow networks — so redo on CPU.
-  const segs = segmentCount(path.join(info.dir, ladder[ladder.length - 1].name, 'index.m3u8'));
+  const segs = segmentCount(path.join(outDir, ladder[ladder.length - 1].name, 'index.m3u8'));
   const expectedSegs = Math.floor(duration / 4);
   if (duration > 20 && segs < expectedSegs * 0.5) {
-    if (encoder === 'libx264') throw new Error(`Only ${segs} segments were produced (expected ~${expectedSegs}).`);
-    console.log(`  ⚠ ${encoder} ignored keyframe settings (${segs} segments, expected ~${expectedSegs}). Redoing with the CPU encoder…`);
-    fs.rmSync(lock, { force: true });
-    lockFile = null;
-    return optimize(rel, 'libx264');
+    if (encoder === 'libx264') { removeQuietly(outDir); throw new Error(`Only ${segs} segments were produced (expected ~${expectedSegs}).`); }
+    return retryOnCpu(`${encoder} ignored keyframe settings (${segs} segments, expected ~${expectedSegs}).`);
   }
   console.log(`  ${segs} segments per quality (4s each)`);
 
-  // Embedded text subtitles -> WebVTT files
-  const subs = [];
+  // Embedded text subtitles -> WebVTT files, all in one pass over the file.
   const subStreams = meta.streams.filter((s) => s.codec_type === 'subtitle' && TEXT_SUBS.has(s.codec_name));
-  for (const [i, s] of subStreams.entries()) {
-    const fileName = `sub_${i}.vtt`;
-    const r = spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-i', input, '-map', `0:${s.index}`, '-c:s', 'webvtt', path.join(info.dir, fileName)]);
-    if (r.status === 0) {
-      const label = [s.tags?.title, s.tags?.language].filter(Boolean).join(' · ') || `Track ${i + 1}`;
-      subs.push({ file: fileName, label });
+  const subs = subStreams.map((s, i) => ({
+    file: `sub_${i}.vtt`, index: s.index,
+    label: [s.tags?.title, s.tags?.language].filter(Boolean).join(' · ') || `Track ${i + 1}`,
+  }));
+  if (subs.length) {
+    const subArgs = ['-hide_banner', '-loglevel', 'error', '-y', '-i', input];
+    for (const s of subs) subArgs.push('-map', `0:${s.index}`, '-c:s', 'webvtt', path.join(outDir, s.file));
+    try {
+      await run(subArgs, 0, 'Subtitles');
+      console.log(`  Extracted ${subs.length} subtitle track(s)`);
+    } catch {
+      console.log('  ⚠ Could not extract the subtitles (the movie itself is fine).');
+      subs.length = 0;
     }
   }
-  if (subs.length) console.log(`  Extracted ${subs.length} subtitle track(s)`);
+  const skipped = meta.streams.filter((s) => s.codec_type === 'subtitle' && !TEXT_SUBS.has(s.codec_name)).length;
+  if (skipped) console.log(`  (${skipped} picture-based subtitle track(s) skipped — only text subtitles can be shown)`);
 
-  fs.writeFileSync(path.join(info.dir, 'ready.json'), JSON.stringify({
-    source: input, duration, qualities: ladder.map((r) => r.name), subs, createdAt: new Date().toISOString(),
+  // Switch to the new build in one step, then remove the previous one.
+  const readyTmp = path.join(info.dir, 'ready.json.tmp');
+  fs.writeFileSync(readyTmp, JSON.stringify({
+    source: input, build: buildId, duration, qualities: ladder.map((r) => r.name),
+    subs: subs.map(({ file, label }) => ({ file, label })), createdAt: new Date().toISOString(),
   }, null, 2));
+  fs.renameSync(readyTmp, path.join(info.dir, 'ready.json'));
   console.log('  ✓ Done');
+
+  const old = fs.readdirSync(info.dir).filter((e) => e !== buildId && e !== 'ready.json');
+  if (old.length) {
+    if (info.ready) {
+      // Anyone watching switches to the new version within ~10 s; give them time before deleting.
+      console.log('  Removing the previous version in 20 s (so anyone watching can switch over)…');
+      await new Promise((r) => setTimeout(r, 20_000));
+    }
+    for (const e of old) removeQuietly(path.join(info.dir, e));
+  }
+}
+
+function removeQuietly(p) {
+  try { fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch {}
 }
 
 (async () => {
@@ -286,8 +325,7 @@ async function optimize(rel, encoder) {
     try {
       await optimize(rel, encoder);
     } catch (e) {
-      console.log(`  ✗ Failed: ${String(e.message).split('\n').slice(-4).join('\n    ')}`);
-      if (encoder !== 'libx264') console.log('    Try again with:  npm run optimize -- --cpu');
+      console.log(`  ✗ Failed: ${String(e.message).trim().split('\n').slice(-4).join('\n    ')}`);
     }
   }
   console.log('\nAll done. If the server is running, everyone switches to the optimized version automatically within ~10 s.');

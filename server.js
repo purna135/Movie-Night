@@ -37,7 +37,12 @@ const PASSCODE = (process.env.PASSCODE || String(crypto.randomInt(100000, 999999
 const TOKEN = crypto.randomBytes(24).toString('hex');
 const COOKIE = 'mn_session';
 
-const movies = () => lib.listMovies(MOVIES_DIR);
+// The library is scanned on joins, picks and a 10 s timer; a tiny cache keeps bursts cheap on big folders.
+let moviesCache = { at: 0, list: [] };
+const movies = (fresh = false) => {
+  if (fresh || Date.now() - moviesCache.at > 2000) moviesCache = { at: Date.now(), list: lib.listMovies(MOVIES_DIR) };
+  return moviesCache.list;
+};
 
 // STUN finds a direct path; TURN (optional, e.g. metered.ca / Cloudflare / your own coturn) relays
 // voice when direct is blocked. TURN_URL may list several addresses separated by commas, e.g.
@@ -63,7 +68,7 @@ function readCookie(req) {
   const m = (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${COOKIE}=([a-f0-9]+)`));
   return m ? m[1] : null;
 }
-const authed = (req) => readCookie(req) === TOKEN || req.query.k === TOKEN;
+const authed = (req) => readCookie(req) === TOKEN;
 function auth(req, res, next) {
   if (!authed(req)) return res.status(401).end();
   next();
@@ -73,8 +78,9 @@ let failed = 0;
 let lockedUntil = 0;
 app.post('/api/join', (req, res) => {
   if (Date.now() < lockedUntil) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
-  const code = String(req.body?.code || '').trim();
-  const ok = code.length === PASSCODE.length && crypto.timingSafeEqual(Buffer.from(code), Buffer.from(PASSCODE));
+  // Compare fixed-length hashes: constant time, and no crash when the lengths differ in bytes.
+  const hash = (s) => crypto.createHash('sha256').update(s).digest();
+  const ok = crypto.timingSafeEqual(hash(String(req.body?.code || '').trim()), hash(PASSCODE));
   if (!ok) {
     if (++failed >= 15) { lockedUntil = Date.now() + 60_000; failed = 0; }
     return res.status(401).json({ error: 'Wrong passcode' });
@@ -101,17 +107,24 @@ app.get('/media/*', auth, (req, res) => {
 app.get('/subs/*', auth, (req, res) => {
   const abs = lib.safeResolve(MOVIES_DIR, req.params[0]);
   if (!abs || !lib.SUB_EXT.has(path.extname(abs).toLowerCase()) || !fs.existsSync(abs)) return res.status(404).end();
-  let text = fs.readFileSync(abs, 'utf8').replace(/^\uFEFF/, '').replace(/\r/g, '');
+  // Many downloaded .srt files are Windows-1252 rather than UTF-8 (\u00E9, \u00F1, \u2019 turn into \uFFFD) \u2014 detect and convert.
+  const raw = fs.readFileSync(abs);
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { text = new TextDecoder('windows-1252').decode(raw); }
+  text = text.replace(/^\uFEFF/, '').replace(/\r/g, '');
   if (path.extname(abs).toLowerCase() === '.srt') {
     text = 'WEBVTT\n\n' + text.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
   }
   res.type('text/vtt').send(text);
 });
 
+// Every optimize run writes a new build folder (/hls/<movie>/<build>/…), so files never change in
+// place and phones can cache them hard.
 app.use('/hls', auth, express.static(lib.PREPARED_DIR, {
-  maxAge: '1d',
+  maxAge: '7d',
+  immutable: true,
   setHeaders(res, file) {
-    if (file.endsWith('.m3u8')) res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    if (file.endsWith('.m3u8')) res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache' });
     else if (file.endsWith('.ts')) res.setHeader('Content-Type', 'video/mp2t');
     else if (file.endsWith('.vtt')) res.setHeader('Content-Type', 'text/vtt');
   },
@@ -182,8 +195,14 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   socket.on('join', ({ name, clientId } = {}) => {
     const cid = clean(clientId, 64) || socket.id;
-    // Drop a stale socket from the same device (reconnect on a flaky network).
-    for (const [sid, u] of users) if (u.clientId === cid && sid !== socket.id) users.delete(sid);
+    // Drop a stale socket from the same device (reconnect on a flaky network, before the server has
+    // noticed the old one is dead) and tell voice peers, so nobody keeps a call open to a ghost.
+    for (const [sid, u] of users) {
+      if (u.clientId !== cid || sid === socket.id) continue;
+      users.delete(sid);
+      io.emit('voice-left', sid);
+      io.sockets.sockets.get(sid)?.disconnect(true);
+    }
     const used = new Set([...users.values()].map((u) => u.color));
     const color = COLORS.find((c) => !used.has(c)) || COLORS[users.size % COLORS.length];
     const uid = crypto.createHash('sha1').update(cid).digest('hex').slice(0, 12);
@@ -219,7 +238,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('refresh-movies', () => {
-    const list = movies();
+    const list = movies(true);
     io.emit('movies', list);
     if ((!room.movie || !list.some((m) => m.id === room.movie)) && list[0]) {
       setRoom({ movie: list[0].id, playing: false, time: 0, autoPaused: false }, { action: 'select' });
@@ -292,8 +311,8 @@ io.on('connection', (socket) => {
   // friends over the same connection that already carries chat. "volatile" = drop rather than queue
   // on a congested link, so voice never lags further and further behind.
   socket.on('vr', (pkt) => {
-    if (!users.get(socket.id)?.voice || !pkt || !pkt.d || !Array.isArray(pkt.to)) return;
-    if (pkt.d.byteLength > 2048) return;
+    if (!users.get(socket.id)?.voice || !pkt || !Buffer.isBuffer(pkt.d) || !Array.isArray(pkt.to)) return;
+    if (pkt.d.length > 2048) return;
     for (const id of pkt.to.slice(0, 8)) {
       if (id !== socket.id && users.get(id)?.voice) io.to(id).volatile.emit('vr', { from: socket.id, d: pkt.d });
     }
@@ -327,7 +346,7 @@ let librarySig = '';
 setInterval(() => {
   if (!users.size) return;
   const list = movies();
-  const sig = list.map((m) => `${m.id}|${m.hls ? 1 : 0}|${m.subs.length}`).join('\n');
+  const sig = JSON.stringify(list.map((m) => [m.id, m.hls, m.subs.length]));
   if (librarySig && sig !== librarySig) {
     io.emit('movies', list);
     if (list.some((m) => m.id === room.movie && m.hls)) console.log('⚡ Optimized version ready — viewers switched to adaptive quality.');
@@ -355,7 +374,7 @@ function findCloudflared() {
 
 function banner(url) {
   const list = movies();
-  const share = `${url}/?code=${PASSCODE}`; // one link: opening it fills in the passcode automatically
+  const share = `${url}/?code=${encodeURIComponent(PASSCODE)}`; // one link: opening it fills in the passcode automatically
   const line = '─'.repeat(64);
   console.log(`\n┌${line}┐`);
   console.log('  🎬  Movie Night is live — send this ONE link to your friend:');
@@ -374,25 +393,42 @@ function banner(url) {
   } catch {}
 }
 
-function startTunnel() {
+// Quick tunnels occasionally drop (PC slept, Wi-Fi changed). If that happens, open a new one and
+// print the new link — the old link stops working, so it has to be re-sent.
+let tunnel = null;
+let stopping = false;
+let linkShown = false;
+function startTunnel(attempt = 0) {
   const cf = spawn(findCloudflared(), ['tunnel', '--no-autoupdate', '--url', `http://localhost:${port}`], { windowsHide: true });
+  tunnel = cf;
   let found = false;
   const onData = (buf) => {
     const m = !found && String(buf).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-    if (m) { found = true; banner(m[0]); }
+    if (m) {
+      found = true;
+      if (linkShown) console.log('\n🔁  The tunnel reconnected with a NEW link — send this one to your friend:');
+      linkShown = true;
+      banner(m[0]);
+    }
   };
   cf.stdout.on('data', onData);
   cf.stderr.on('data', onData);
   cf.on('error', () => {
+    stopping = true; // not installed: don't retry
     console.log('\n⚠  cloudflared is not installed, so there is no public link yet.');
     console.log('   Install it once (PowerShell):  winget install --id Cloudflare.cloudflared');
     console.log('   then open a new terminal and run  npm start  again.\n');
   });
-  cf.on('exit', (code) => found && console.log(`Tunnel closed (code ${code}).`));
-  const stop = () => { cf.kill(); process.exit(0); };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
+  cf.on('exit', (code) => {
+    if (stopping) return;
+    const wait = Math.min(30, 3 * (attempt + 1));
+    console.log(`\n⚠  Tunnel closed (code ${code}). Opening a new one in ${wait}s…`);
+    setTimeout(() => startTunnel(found ? 0 : attempt + 1), wait * 1000);
+  });
 }
+const shutdown = () => { stopping = true; tunnel?.kill(); process.exit(0); };
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 let port = PORT;
 server.on('error', (err) => {

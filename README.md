@@ -100,6 +100,7 @@ npm start
 
 Send that link — friends only type their name. Keep the terminal open while you watch; `Ctrl+C` stops
 everything. Each restart makes a new link; an old link shows a clear message and lets them type the passcode.
+If the tunnel drops (PC slept, Wi-Fi changed), a new one opens by itself and the terminal prints the new link to send.
 
 ## Features
 
@@ -110,10 +111,10 @@ everything. Each restart makes a new link; an old link shows a clear message and
 | 📶 **Adaptive quality** | Each viewer gets the best quality their connection can sustain and switches as it changes — or picks one manually. |
 | 💬 **Chat & reactions** | Grouped chat bubbles, typing indicator, floating emoji reactions. In full screen, new messages pop up over the video. |
 | 🎙️ **Voice chat** | Direct phone-to-phone when the network allows; otherwise it **automatically switches to relaying through your PC** (within ~8 s), so it connects on any network the app works on. Light on data, echo-cancelled, movie volume dips while a friend talks. People tab shows *Direct* / *Via server*. |
-| 💬 **Subtitles** | `Film.srt` next to `Film.mp4` just works; text subtitles inside MKVs are extracted by `optimize`. Rendered big and readable on every device. |
+| 💬 **Subtitles** | `Film.srt` (or `Film.en.srt`, `Film - English.srt`) next to `Film.mp4` just works, in UTF-8 or Windows encodings; text subtitles inside MKVs are extracted by `optimize`. Rendered big and readable on every device. |
 | 📱 **Phone-first UI** | Portrait: video + chat. Landscape: full-screen video with chat beside it. Double-tap sides to skip, screen stays awake, chat box stays above the keyboard. |
 | 🖥️ **Desktop too** | Side-by-side layout and shortcuts: `Space` play/pause · `←/→` ±10 s · `F` full screen · `M` mute mic · `C` chat. |
-| 🔁 **Auto-reconnect** | Dropped Wi-Fi or switched to mobile data? Viewers reconnect and snap back to the right moment, voice included. |
+| 🔁 **Auto-reconnect** | Dropped Wi-Fi or switched to mobile data? Viewers reconnect and snap back to the right moment without re-downloading the video, voice included. |
 | 🔒 **Private** | Random tunnel URL + passcode + HTTP-only session cookie. The movie stays on your PC and streams only to people you invite, over an encrypted Cloudflare tunnel. |
 
 ## How it works
@@ -212,8 +213,8 @@ mobile data and want call-quality voice, add a TURN relay — it takes about 5 m
 | `npm start -- "D:\Films\Movie.mkv"` | Serve that folder and pre-select the file |
 | `npm run local` | No tunnel — same Wi-Fi only (voice needs https, so it's off on phones) |
 | `npm run optimize` | Prepare all new movies for adaptive streaming |
-| `npm run optimize -- --force` | Re-do movies that were already prepared |
-| `npm run optimize -- --cpu` | Skip GPU encoders (use if a GPU encode fails) |
+| `npm run optimize -- --force` | Re-do movies that were already prepared — safe mid-movie: viewers switch to the new version when it's ready |
+| `npm run optimize -- --cpu` | Skip GPU encoders (a failed GPU encode already retries on the CPU by itself) |
 
 Settings go in a **`.env`** file in the project folder (copy `.env.example`), or as environment variables
 (`$env:PASSCODE="246810"` in PowerShell before `npm start`):
@@ -256,8 +257,9 @@ Browsers only allow the microphone on `https://`. Use the tunnel link, not the `
 <details>
 <summary><b>Optimize fails or the GPU encoder errors</b></summary>
 
-Run `npm run optimize -- --cpu`. If an optimize was interrupted, just run it again — it starts that movie over
-cleanly and refuses to run twice on the same movie at once.
+A failed GPU encode automatically retries on the CPU; to skip the GPU entirely, run `npm run optimize -- --cpu`.
+If an optimize was interrupted, just run it again — it starts that movie over cleanly (the previous version keeps
+playing until the new one is done) and refuses to run twice on the same movie at once.
 </details>
 
 <details>

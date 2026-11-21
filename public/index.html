@@ -20,7 +20,6 @@
     <symbol id="i-expand" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
     <symbol id="i-shrink" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></symbol>
     <symbol id="i-cc" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10.5 10.2a2.4 2.4 0 1 0 0 3.6M17 10.2a2.4 2.4 0 1 0 0 3.6"/></symbol>
-    <symbol id="i-hd" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
     <symbol id="i-chat" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.6A8.4 8.4 0 1 1 21 11.5z"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3" fill="currentColor"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></symbol>
     <symbol id="i-mic-off" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 3l18 18M9 9v2a3 3 0 0 0 5.1 2.1M15 9.3V5.5a3 3 0 0 0-5.9-.7M5 11a7 7 0 0 0 11.2 5.6M19 11a7 7 0 0 1-.6 2.9M12 18v3.5"/></symbol>
@@ -69,7 +68,7 @@
       <div class="now" id="nowTitle"></div>
       <div class="top-right">
         <div class="net" id="net" title="Connection"><i></i><span id="netText">Live</span></div>
-        <div class="voice" id="voiceBox">
+        <div class="voice">
           <button class="btn voice-join" id="voiceJoin" type="button"><svg><use href="#i-headset"/></svg><span>Join voice</span></button>
           <div class="voice-on" id="voiceOn" hidden>
             <button class="icon-btn mic" id="micBtn" type="button" title="Mute (M)"><svg><use href="#i-mic"/></svg></button>
@@ -79,8 +78,8 @@
       </div>
     </header>
 
-    <main class="layout" id="layout">
-      <section class="stage" id="stage">
+    <main class="layout">
+      <section class="stage">
         <div class="player" id="player">
           <video id="video" playsinline webkit-playsinline preload="auto"></video>
           <div class="reactions" id="reactions"></div>
@@ -189,7 +188,7 @@
   </div>
 
   <div id="audioSink" hidden></div>
-  <script src="/socket.io/socket.io.js"></script>
+  <script src="/socket.io/socket.io.min.js" defer></script>
   <script src="/vendor/hls.min.js" defer></script>
   <script src="/app.js" defer></script>
 </body>

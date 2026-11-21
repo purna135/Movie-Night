@@ -149,6 +149,11 @@
     socket?.disconnect();
     socket = null;
     teardownVoice();
+    // Stop the movie (it would keep playing behind the join screen) and forget the old room.
+    unload();
+    current = null;
+    state = null;
+    me = null;
     el.app.hidden = true;
     el.join.hidden = false;
     el.codeField.hidden = false;
@@ -176,14 +181,14 @@
       updateNet();
     });
 
-    socket.on('welcome', ({ me: m, movies: list, state: s, history }) => {
+    socket.on('welcome', ({ me: m, movies: list, state: s, history: past }) => {
       me = m;
-      movies = list;
       el.messages.innerHTML = '';
       lastMsg = { uid: null, ts: 0 };
-      history.forEach((msg) => addMessage(msg, true));
+      past.forEach((msg) => addMessage(msg, true));
       showApp();
-      renderMovies();
+      // A reconnect (flaky network) keeps the loaded video and its buffer; only a changed source reloads.
+      onMovies(list, true);
       scrollChat(true);
       handleState(s, true);
       if (voice.active) rejoinVoice();
@@ -256,16 +261,15 @@
     select: (n) => `🎬  ${n} changed the movie`,
   };
 
-  function handleState(s, initial = false) {
-    const prevMovie = state?.movie;
+  function handleState(s, quiet = false) {
     state = s;
     if (s.action === 'wait') { waitMode = true; waitingNames = s.waitingFor || []; }
-    else if (s.action || initial) waitMode = false;
+    else if (s.action || quiet) waitMode = false;
 
-    if (initial || s.movie !== prevMovie || (current?.id !== s.movie)) selectCurrent(s.movie);
+    if (current?.id !== s.movie) selectCurrent(s.movie);
     else applyState();
 
-    if (!initial) {
+    if (!quiet) {
       if (s.action && s.byId && s.byId !== me?.id && ACTION_TEXT[s.action]) toast(ACTION_TEXT[s.action](s.by, s.time));
       if (s.action === 'wait') toast(`⏳  Waiting for ${waitingNames.join(', ')} to catch up`);
       if (s.action === 'resume') toast('▶  Everyone caught up');
@@ -318,6 +322,9 @@
 
   function sendControl(action, t = video.currentTime) {
     if (!state || !socket) return;
+    // Offline: Socket.IO would queue this and replay it after reconnecting, yanking the whole room
+    // back to where this viewer was. Drop it — on reconnect this phone snaps to the room instead.
+    if (!socket.connected) { toast('Reconnecting… try again in a moment'); return; }
     const now = serverNow();
     if (action === 'play') state = { ...state, playing: true, time: t, serverNow: now };
     else if (action === 'pause') state = { ...state, playing: false, time: t, serverNow: now };
@@ -328,6 +335,7 @@
 
   function togglePlay() {
     if (!current || !state) return;
+    if (!socket?.connected) return toast('Reconnecting… try again in a moment');
     if (state.playing) { sendControl('pause'); video.pause(); }
     else { sendControl('play'); tryPlay(); }
     showControls();
@@ -335,6 +343,7 @@
 
   function skip(delta) {
     if (!current) return;
+    if (!socket?.connected) return toast('Reconnecting… try again in a moment');
     const t = clamp(video.currentTime + delta, 0, Math.max(0, duration() - 1));
     sendControl('seek', t);
     seekTo(t);
@@ -451,11 +460,32 @@
   function unload() {
     if (hls) { hls.destroy(); hls = null; }
     video.removeAttribute('src');
+    setTracks(null);
+    try { video.load(); } catch {}
+    sourceKind = null;
+  }
+
+  function setTracks(m) {
     $$('track', video).forEach((t) => t.remove());
     subTrack = null;
     el.subs.hidden = true;
-    try { video.load(); } catch {}
-    sourceKind = null;
+    for (const s of m?.subs || []) {
+      const t = document.createElement('track');
+      Object.assign(t, { kind: 'subtitles', label: s.label, src: s.src, srclang: 'und' });
+      video.appendChild(t);
+    }
+    el.ccBtn.hidden = !m?.subs?.length;
+  }
+
+  // Title + play/pause/±10 s on the lock screen and in the notification shade. The resulting
+  // play/pause events go through the normal handlers below, so they're shared with the room.
+  function updateMediaSession(m) {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      navigator.mediaSession.metadata = m ? new MediaMetadata({ title: m.name, artist: 'Movie Night' }) : null;
+      navigator.mediaSession.setActionHandler('seekbackward', () => skip(-10));
+      navigator.mediaSession.setActionHandler('seekforward', () => skip(10));
+    } catch {}
   }
 
   function loadMovie(m) {
@@ -501,28 +531,31 @@
       sourceKind = 'direct';
       video.src = mediaUrl(m);
     }
-    for (const s of m.subs || []) {
-      const t = document.createElement('track');
-      Object.assign(t, { kind: 'subtitles', label: s.label, src: s.src, srclang: 'und' });
-      video.appendChild(t);
-    }
-    el.ccBtn.hidden = !(m.subs && m.subs.length);
-    video.volume = userVolume;
+    setTracks(m);
+    video.volume = ducked ? userVolume * 0.35 : userVolume;
+    updateMediaSession(m);
     updateQualityLabel();
     updateTime();
     updateCenter();
   }
 
-  function onMovies(list) {
-    const before = current && movies.find((m) => m.id === current.id);
+  // New library from the server. If the playing movie got an optimized version (or a newer build of
+  // it), reload it — applyState() then puts this viewer straight back at the room's position.
+  function onMovies(list, quiet = false) {
     movies = list;
-    renderMovies();
     const after = current && movies.find((m) => m.id === current.id);
-    if (after && before && !before.hls && after.hls) {
+    if (after) {
+      const before = current;
       current = after;
-      toast('⚡  Switched to adaptive quality');
-      loadMovie(after);
+      if (after.hls !== before.hls) {
+        if (!quiet && after.hls && !before.hls) toast('⚡  Switched to adaptive quality');
+        loadMovie(after);
+      } else if (JSON.stringify(after.subs) !== JSON.stringify(before.subs)) {
+        setTracks(after); // e.g. an .srt was added: no need to reload the video
+        applySubtitlePref();
+      }
     }
+    renderMovies();
   }
 
   // ---------- Quality / subtitles ----------
@@ -842,7 +875,7 @@
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = e;
-      b.onclick = () => { socket?.emit('react', { emoji: e }); if (host === el.reactStrip) showControls(); };
+      b.onclick = () => { socket?.volatile.emit('react', { emoji: e }); if (host === el.reactStrip) showControls(); };
       // Don't steal focus from the message box — otherwise tapping an emoji closes the keyboard.
       b.addEventListener('pointerdown', (ev) => ev.preventDefault());
       host.appendChild(b);
@@ -878,6 +911,7 @@
   // Keyboard (desktop)
   document.addEventListener('keydown', (e) => {
     if (el.app.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!el.modal.hidden) { if (e.key === 'Escape') el.modalCancel.click(); return; }
     if (e.target.matches('input, textarea')) {
       if (e.key === 'Escape') e.target.blur();
       return;
@@ -1025,7 +1059,7 @@
     autoGrow();
     if (Date.now() - lastTypingSent > 2500 && el.msgInput.value.trim()) {
       lastTypingSent = Date.now();
-      socket?.emit('typing');
+      socket?.volatile.emit('typing');
     }
   });
 
@@ -1172,6 +1206,9 @@
     voice.active = false;
     voice.meters.delete('me');
     setSpeaking(me?.id, false);
+    clearInterval(voice.timer);
+    voice.timer = null;
+    duck(false);
     renderVoice();
   }
 

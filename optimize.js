@@ -80,7 +80,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
   process.on(sig, () => { console.log('\n  Stopped.'); cleanup(); process.exit(130); });
 }
 
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const alive = (pid) => { if (!(pid > 0)) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
 const FFMPEG = findTool('ffmpeg');
 const FFPROBE = findTool('ffprobe');
@@ -345,13 +345,15 @@ function clean() {
   for (const e of fs.existsSync(lib.PREPARED_DIR) ? fs.readdirSync(lib.PREPARED_DIR, { withFileTypes: true }) : []) {
     const d = path.join(lib.PREPARED_DIR, e.name);
     if (!e.isDirectory()) {
-      if (e.name.endsWith('.lock') && !alive(Number(fs.readFileSync(d, 'utf8')))) removeQuietly(d); // stale lock
+      if (e.name.endsWith('.lock') && !alive(readPid(d))) removeQuietly(d); // stale lock
       continue;
     }
     let source = null;
-    try { source = JSON.parse(fs.readFileSync(path.join(d, 'ready.json'), 'utf8')).source; } catch {}
-    const lock = d + '.lock';
-    if (fs.existsSync(lock) && alive(Number(fs.readFileSync(lock, 'utf8')))) continue; // being optimized now
+    const ready = path.join(d, 'ready.json');
+    try { source = JSON.parse(fs.readFileSync(ready, 'utf8')).source; } catch {
+      if (fs.existsSync(ready)) { console.log(`  (skipping ${e.name} — couldn't read its ready.json right now)`); continue; }
+    }
+    if (alive(readPid(d + '.lock'))) continue; // being optimized now
     if (source && fs.existsSync(source)) continue;
     if (source && !fs.existsSync(path.parse(source).root)) { // e.g. a USB drive that's just unplugged
       console.log(`  (keeping ${e.name} — its drive ${path.parse(source).root} isn't connected)`);
@@ -364,6 +366,10 @@ function clean() {
     freed += bytes;
   }
   console.log(removed ? `\nRemoved ${removed} leftover folder(s), freed ${human(freed)}.` : 'Nothing to clean — every optimized copy belongs to a movie that still exists.');
+}
+
+function readPid(lockFile) {
+  try { return Number(fs.readFileSync(lockFile, 'utf8')); } catch { return 0; }
 }
 
 function human(bytes) {

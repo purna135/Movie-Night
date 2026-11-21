@@ -29,7 +29,7 @@
     voiceJoin: $('#voiceJoin'), voiceOn: $('#voiceOn'), micBtn: $('#micBtn'), voiceLeave: $('#voiceLeave'),
     player: $('#player'), video: $('#video'), reactions: $('#reactions'), ticker: $('#ticker'),
     centerMsg: $('#centerMsg'), centerText: $('#centerText'), tapSync: $('#tapSync'), empty: $('#emptyState'),
-    cTitle: $('#cTitle'), cMic: $('#cMic'), cChat: $('#cChat'), cChatBadge: $('#cChatBadge'),
+    cTitle: $('#cTitle'), cMic: $('#cMic'), cVoiceJoin: $('#cVoiceJoin'), cVoiceLeave: $('#cVoiceLeave'), cChat: $('#cChat'), cChatBadge: $('#cChatBadge'),
     playBtn: $('#playBtn'), back10: $('#back10'), fwd10: $('#fwd10'),
     seekWrap: $('#seekWrap'), seek: $('#seek'), seekFill: $('#seekFill'), seekBuf: $('#seekBuf'), seekTip: $('#seekTip'),
     curTime: $('#curTime'), durTime: $('#durTime'), muteBtn: $('#muteBtn'), volume: $('#volume'),
@@ -39,7 +39,7 @@
     messages: $('#messages'), typing: $('#typing'), people: $('#people'), movies: $('#movies'), moviesCount: $('#moviesCount'),
     refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), sendBtn: $('#sendBtn'), kbFloat: $('#kbFloat'), kbReacts: $('#kbReacts'), quickReacts: $('#quickReacts'),
     modal: $('#modal'), modalTitle: $('#modalTitle'), modalText: $('#modalText'), modalOk: $('#modalOk'), modalCancel: $('#modalCancel'),
-    audioSink: $('#audioSink'), earMode: $('#earMode'),
+    audioSink: $('#audioSink'), earMode: $('#earMode'), micState: $('#micState'),
   };
   const video = el.video;
   const REACTS = ['😂', '😮', '😍', '🔥', '👏', '😭', '💀', '🍿'];
@@ -428,7 +428,7 @@
       ? 'This browser can’t play this file’s format.<br>On the host PC run <b>npm run optimize</b>, then refresh Movies.'
       : 'Playback error. Retrying…';
     const failed = current;
-    if (!fixable) setTimeout(() => { if (current === failed) loadMovie(current); }, 2000);
+    if (!fixable) setTimeout(() => { if (current && current.id === failed.id) loadMovie(current); }, 2000);
   });
 
   document.addEventListener('visibilitychange', () => {
@@ -522,8 +522,13 @@
     if (!('mediaSession' in navigator)) return;
     try {
       navigator.mediaSession.metadata = m ? new MediaMetadata({ title: m.name, artist: 'Movie Night' }) : null;
-      navigator.mediaSession.setActionHandler('play', () => { if (!state?.playing || video.paused) togglePlay(); });
-      navigator.mediaSession.setActionHandler('pause', () => { if (state?.playing) togglePlay(); else video.pause(); });
+      navigator.mediaSession.setActionHandler('play', () => {
+        if (live() && state && (!state.playing || video.paused)) togglePlay(); else tryPlay();
+      });
+      navigator.mediaSession.setActionHandler('pause', () => {
+        if (live() && state?.playing) sendControl('pause');
+        video.pause();
+      });
       navigator.mediaSession.setActionHandler('seekbackward', () => skip(-10));
       navigator.mediaSession.setActionHandler('seekforward', () => skip(10));
     } catch {}
@@ -972,7 +977,7 @@
       if (e.key === 'Escape') e.target.blur();
       return;
     }
-    if ((e.key === ' ' || e.key === 'Enter') && e.target.closest('button, a, select, [role="button"], [tabindex]')) return;
+    if ((e.key === ' ' || e.key === 'Enter') && e.target.closest('button, a, select, [role="button"], [tabindex]') && e.target.matches(':focus-visible')) return;
     const k = e.key.toLowerCase();
     const map = {
       ' ': togglePlay, k: togglePlay,
@@ -1241,8 +1246,10 @@
     if (voice.active || voice.joining) return; // second tap while the permission prompt is up
     if (!live()) return toast(OFFLINE);
     voice.joining = true;
-    el.voiceJoin.disabled = true;
+    el.voiceJoin.disabled = el.cVoiceJoin.disabled = true;
+    ensureAudio(); // still inside the tap, so the audio engine is allowed to start
     let stream;
+    const askedEarphones = earphones();
     try {
       stream = await navigator.mediaDevices.getUserMedia(micConstraints());
     } catch (err) {
@@ -1252,10 +1259,14 @@
         NotFoundError: '🎙  No microphone found',
       }[err.name] || 'Couldn’t access the microphone';
       toast(msg);
+      clearInterval(voice.timer); // undo ensureAudio() above
+      voice.timer = null;
+      voice.ctx?.close().catch(() => {});
+      voice.ctx = null;
       return;
     } finally {
       voice.joining = false;
-      el.voiceJoin.disabled = false;
+      el.voiceJoin.disabled = el.cVoiceJoin.disabled = false;
     }
     if (!socket) { stream.getTracks().forEach((t) => t.stop()); return; } // sent back to the join screen meanwhile
     voice.stream = stream;
@@ -1265,6 +1276,11 @@
     addMeter('me', voice.stream);
     socket.emit('voice-join');
     renderVoice();
+    // Earphones mode: phones only reliably drop "call audio" when the mic is re-opened after the call
+    // is already running (that's why flipping the switch mid-call worked but joining with it on
+    // didn't). So do that re-open automatically once the call has started.
+    // (Also re-open if the switch was flipped while the permission prompt was up.)
+    if (earphones() || askedEarphones !== earphones()) setTimeout(() => { if (voice.active) swapMic(); }, 2500);
     if (isTouch && !earphones() && !store.get('earHint', false)) {
       store.set('earHint', true);
       toast('🎧  In voice. Wearing earphones? Turn on Earphones mode in People for full movie sound');
@@ -1313,6 +1329,18 @@
     }));
     if (relay.capture) { stopRelayCapture(); startRelayCapture(); }
     addMeter('me', stream);
+    renderVoice();
+  }
+
+  // "Mic now: …" under the Earphones switch — what the browser really applied, not just the setting.
+  function renderMicState() {
+    const t = voice.active && voice.stream?.getAudioTracks()[0];
+    const ec = t && t.readyState === 'live' ? t.getSettings?.().echoCancellation : undefined;
+    el.micState.hidden = ec === undefined;
+    if (ec !== undefined) {
+      el.micState.textContent = ec ? 'Mic now: call mode (echo cancelling on)' : 'Mic now: earphones mode ✓ (echo cancelling off)';
+      el.micState.classList.toggle('on', !ec);
+    }
   }
 
   function rejoinVoice() {
@@ -1339,6 +1367,10 @@
     clearInterval(voice.timer);
     voice.timer = null;
     duck(false);
+    voice.meters.clear();
+    relay.sink.clear();
+    voice.ctx?.close().catch(() => {});
+    voice.ctx = null;
     renderVoice();
   }
 
@@ -1351,9 +1383,13 @@
   }
 
   function renderVoice() {
+    renderMicState();
     el.voiceJoin.hidden = voice.active;
     el.voiceOn.hidden = !voice.active;
     el.cMic.hidden = !voice.active;
+    // Full screen hides the top bar, so the player's own corner gets join / leave too.
+    el.cVoiceJoin.hidden = voice.active;
+    el.cVoiceLeave.hidden = !voice.active;
     for (const b of [el.micBtn, el.cMic]) {
       b.classList.toggle('muted', voice.muted);
       b.classList.toggle('mic', true);
@@ -1365,6 +1401,8 @@
   el.voiceLeave.addEventListener('click', leaveVoice);
   el.micBtn.addEventListener('click', toggleMic);
   el.cMic.addEventListener('click', toggleMic);
+  el.cVoiceJoin.addEventListener('click', () => { showControls(); joinVoice(); });
+  el.cVoiceLeave.addEventListener('click', () => { showControls(); leaveVoice(); });
 
   function makePeer(id, initiator) {
     const pc = new RTCPeerConnection({ iceServers: session.iceServers, bundlePolicy: 'max-bundle' });

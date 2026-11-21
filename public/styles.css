@@ -172,6 +172,7 @@ svg { width: 22px; height: 22px; flex: none; }
 .icon-btn.mic.muted { background: rgba(255,84,112,.16); color: var(--bad); }
 .icon-btn.mic.speaking { box-shadow: 0 0 0 2px var(--ok); }
 .icon-btn.leave { color: var(--bad); }
+.icon-btn.glass.leave { color: #ff8a9c; }
 .icon-btn.leave:hover { background: rgba(255,84,112,.16); }
 
 .layout { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
@@ -370,6 +371,8 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: con
 .voice-tip svg { color: var(--accent-2); width: 20px; height: 20px; margin-top: 1px; }
 .voice-tip p { margin: 0; flex: 1; }
 .voice-tip p b { color: var(--text); }
+.mic-state { display: block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.mic-state.on { color: var(--ok); }
 .ear-mode { cursor: pointer; }
 .switch { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 42px; height: 24px; margin: 2px 0 0; border-radius: 999px; background: var(--surface-2); border: 1px solid rgba(255,255,255,.12); cursor: pointer; transition: background .2s; }
 .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .2s; }

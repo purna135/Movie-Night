@@ -82,17 +82,29 @@ function auth(req, res, next) {
 
 // Wrong-passcode lockout per device (Cloudflare passes the visitor's address), so a stranger guessing
 // codes can't lock your friends out.
-const attempts = new Map(); // ip -> { failed, until }
+// An overall ceiling (60 wrong codes a minute from everyone together) stops anyone who can switch
+// addresses. IPv6 addresses are grouped per /64 (one home/phone line).
+const attempts = new Map(); // device -> { failed, until, last }
+let recentFails = [];
+const deviceOf = (req) => {
+  const ip = String(req.get('cf-connecting-ip') || req.ip || 'local');
+  return ip.includes(':') ? ip.split(':').slice(0, 4).join(':') : ip;
+};
 app.post('/api/join', (req, res) => {
-  const ip = req.get('cf-connecting-ip') || req.ip || 'local';
-  const a = attempts.get(ip) || { failed: 0, until: 0 };
-  if (Date.now() < a.until) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
+  const now = Date.now();
+  const ip = deviceOf(req);
+  const a = attempts.get(ip) || { failed: 0, until: 0, last: 0 };
+  if (now - a.last > 10 * 60_000) a.failed = 0; // old mistakes are forgiven after 10 minutes
+  recentFails = recentFails.filter((t) => now - t < 60_000);
+  if (now < a.until || recentFails.length >= 60) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
   // Compare fixed-length hashes: constant time, and no crash when the lengths differ in bytes.
   const hash = (s) => crypto.createHash('sha256').update(s).digest();
   const ok = crypto.timingSafeEqual(hash(String(req.body?.code || '').trim()), hash(PASSCODE));
   if (!ok) {
-    if (++a.failed >= 10) Object.assign(a, { until: Date.now() + 60_000, failed: 0 });
-    if (attempts.size > 1000) attempts.clear();
+    recentFails.push(now);
+    a.last = now;
+    if (++a.failed >= 10) Object.assign(a, { until: now + 60_000, failed: 0 });
+    if (attempts.size > 5000) for (const [k, v] of attempts) if (now - v.last > 10 * 60_000) attempts.delete(k);
     attempts.set(ip, a);
     return res.status(401).json({ error: 'Wrong passcode' });
   }
@@ -168,6 +180,10 @@ function setRoom(patch, extra) {
 // If the room's movie was deleted or renamed, move to the first movie (or none).
 function ensureRoomMovie(list) {
   if (room.movie && list.some((m) => m.id === room.movie)) return;
+  // Only switch if the file is really gone — not because one scan briefly failed or missed it.
+  const file = room.movie && lib.safeResolve(MOVIES_DIR, room.movie);
+  if (file && fs.existsSync(file)) return;
+  if (!fs.existsSync(MOVIES_DIR)) return; // drive unplugged/re-plugging: wait for it
   const next = list[0]?.id || null;
   if (next !== room.movie) setRoom({ movie: next, playing: false, time: 0, autoPaused: false }, { action: 'select' });
 }
@@ -264,6 +280,7 @@ io.on('connection', (raw) => {
     if (!room.movie && list[0]) {
       // First movie just appeared: start it for everyone already here too, not only the newcomer.
       Object.assign(room, { movie: list[0].id, playing: false, time: 0, updatedAt: Date.now() });
+      socket.broadcast.emit('movies', list);
       socket.broadcast.emit('state', snapshot({ action: 'select' }));
     }
     socket.emit('welcome', { me, movies: list, state: snapshot(), history });
@@ -400,6 +417,7 @@ setInterval(() => {
 let librarySig = '';
 setInterval(() => {
   if (!users.size) return;
+  if (!fs.existsSync(MOVIES_DIR)) return; // folder briefly unavailable (USB drive, network share): keep the old list
   const list = movies();
   const sig = JSON.stringify(list.map((m) => [m.id, m.hls, m.subs.length]));
   if (librarySig && sig !== librarySig) {
@@ -496,7 +514,8 @@ server.on('error', (err) => {
     console.log(`Port ${port} is busy, trying ${port + 1}…`);
     server.listen(++port);
   } else {
-    throw err;
+    console.error(`\n⚠  Can't start the server: ${err.message}`);
+    process.exit(1);
   }
 });
 

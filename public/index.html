@@ -97,7 +97,9 @@
             <div class="c-top">
               <div class="c-title" id="cTitle"></div>
               <div class="c-top-actions">
+                <button class="icon-btn glass imm-only" id="cVoiceJoin" type="button" title="Join voice"><svg><use href="#i-headset"/></svg></button>
                 <button class="icon-btn glass imm-only" id="cMic" type="button" hidden title="Mute"><svg><use href="#i-mic"/></svg></button>
+                <button class="icon-btn glass imm-only leave" id="cVoiceLeave" type="button" hidden title="Leave voice"><svg><use href="#i-leave"/></svg></button>
                 <button class="icon-btn glass imm-only" id="cChat" type="button" title="Chat (C)"><svg><use href="#i-chat"/></svg><b class="dot" id="cChatBadge" hidden></b></button>
               </div>
             </div>
@@ -151,7 +153,8 @@
           <label class="voice-tip ear-mode">
             <svg><use href="#i-headset"/></svg>
             <p><b>Earphones mode</b><br>Keeps the movie's full sound (music, bass) while you're in voice. Turn on only
-              with earphones — on a speaker your friends would hear your movie through your mic.</p>
+              with earphones — on a speaker your friends would hear your movie through your mic.
+              <small class="mic-state" id="micState" hidden></small></p>
             <input type="checkbox" class="switch" id="earMode" aria-label="Earphones mode">
           </label>
         </div>

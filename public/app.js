@@ -37,7 +37,7 @@
     fsBtn: $('#fsBtn'), menu: $('#menu'), toast: $('#toast'), subs: $('#subs'),
     panel: $('#panel'), panelClose: $('#panelClose'), chatBadge: $('#chatBadge'), peopleCount: $('#peopleCount'),
     messages: $('#messages'), typing: $('#typing'), people: $('#people'), movies: $('#movies'), moviesCount: $('#moviesCount'),
-    refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), sendBtn: $('#sendBtn'), quickReacts: $('#quickReacts'),
+    refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), sendBtn: $('#sendBtn'), kbFloat: $('#kbFloat'), quickReacts: $('#quickReacts'),
     modal: $('#modal'), modalTitle: $('#modalTitle'), modalText: $('#modalText'), modalOk: $('#modalOk'), modalCancel: $('#modalCancel'),
     audioSink: $('#audioSink'),
   };
@@ -938,6 +938,8 @@
         </div>`;
       row.querySelector('.bubble').textContent = m.text;
       el.messages.appendChild(row);
+      // Keyboard open → the chat is hidden behind the raised message box, so float the message above it.
+      if (!silent && el.app.classList.contains('kb-up')) floatAboveKeyboard(m, mine);
       if (!silent && !mine) {
         if (!chatVisible()) { unread++; updateUnread(); }
         if (immersive() && !el.app.classList.contains('chat-open')) tick(m);
@@ -946,6 +948,29 @@
     }
     while (el.messages.children.length > 300) el.messages.firstElementChild.remove();
     if (near || silent) scrollChat(true);
+  }
+
+  // Floating bubbles just above the message box while the keyboard is open.
+  // Sent: right side with "✓ Sent", short-lived. Received: left side with the sender's name, longer.
+  function floatAboveKeyboard(m, mine) {
+    const d = document.createElement('div');
+    d.className = `kb-bubble ${mine ? 'me' : 'them'}`;
+    if (!mine) {
+      const n = document.createElement('b');
+      n.textContent = m.name;
+      n.style.color = m.color;
+      d.appendChild(n);
+    }
+    const t = document.createElement('span');
+    t.className = 'kb-text';
+    t.textContent = m.text;
+    d.appendChild(t);
+    if (mine) d.insertAdjacentHTML('beforeend', `<i class="kb-sent">${svg('i-check')}Sent</i>`);
+    el.kbFloat.appendChild(d);
+    while (el.kbFloat.children.length > 3) el.kbFloat.firstElementChild.remove();
+    const life = mine ? 1600 : 4200;
+    setTimeout(() => d.classList.add('leaving'), life);
+    setTimeout(() => d.remove(), life + 450);
   }
 
   function tick(m) {

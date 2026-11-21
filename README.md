@@ -5,7 +5,7 @@
 **Watch a movie from your PC with friends — in perfect sync, with chat, reactions and voice.**
 Works on phones and desktops, and keeps playing smoothly on slow connections.
 
-![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)
+![Node](https://img.shields.io/badge/node-%E2%89%A518.17-339933?logo=node.js&logoColor=white)
 ![Platform](https://img.shields.io/badge/host-Windows-0078D6?logo=windows&logoColor=white)
 ![Clients](https://img.shields.io/badge/clients-iOS%20%C2%B7%20Android%20%C2%B7%20Desktop-ff6a3d)
 ![Streaming](https://img.shields.io/badge/streaming-adaptive%20HLS-ffb23f)
@@ -53,7 +53,7 @@ types a passcode, and watches the same frame at the same moment.
 
 | Tool | Why | Install (PowerShell as **Administrator**) |
 |---|---|---|
-| [Node.js](https://nodejs.org) 18+ | runs the server | `choco install nodejs-lts -y` |
+| [Node.js](https://nodejs.org) 18.17+ | runs the server | `choco install nodejs-lts -y` |
 | [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) | free public `https://` link | `choco install cloudflared -y` |
 | [FFmpeg](https://ffmpeg.org) | prepares movies for slow networks | `choco install ffmpeg -y` |
 
@@ -107,10 +107,10 @@ If the tunnel drops (PC slept, Wi-Fi changed), a new one opens by itself and the
 | | |
 |---|---|
 | 🎯 **Perfect sync** | Play, pause, seek and ±10 s apply to everyone. Small drift is corrected by gently speeding up/slowing down — no jumps. |
-| ⏳ **Wait for everyone** | If someone's connection stalls, the room pauses at *their* position and resumes automatically when they catch up. |
+| ⏳ **Wait for everyone** | If someone's connection stalls, the room pauses at *their* position and resumes automatically when they catch up (after 45 s it carries on without them, so one bad connection can't hold everyone up). |
 | 📶 **Adaptive quality** | Each viewer gets the best quality their connection can sustain and switches as it changes — or picks one manually. |
 | 💬 **Chat & reactions** | Grouped chat bubbles, typing indicator, floating emoji reactions. In full screen, new messages pop up over the video. |
-| 🎙️ **Voice chat** | Direct phone-to-phone when the network allows; otherwise it **automatically switches to relaying through your PC** (within ~8 s), so it connects on any network the app works on. Light on data, echo-cancelled, movie volume dips while a friend talks. People tab shows *Direct* / *Via server*. |
+| 🎙️ **Voice chat** | Direct phone-to-phone when the network allows; otherwise it **automatically switches to relaying through your PC** (within ~8 s), so it connects on any network the app works on. Light on data, echo-cancelled, movie volume dips while a friend talks. People tab shows *Direct* / *Via TURN* / *Via server*. **Earphones mode** keeps the movie's full sound while you talk. |
 | 💬 **Subtitles** | `Film.srt` (or `Film.en.srt`, `Film - English.srt`) next to `Film.mp4` just works, in UTF-8 or Windows encodings; text subtitles inside MKVs are extracted by `optimize`. Rendered big and readable on every device. |
 | 📱 **Phone-first UI** | Portrait: video + chat. Landscape: full-screen video with chat beside it. Double-tap sides to skip, screen stays awake, chat box stays above the keyboard. |
 | 🖥️ **Desktop too** | Side-by-side layout and shortcuts: `Space` play/pause · `←/→` ±10 s · `F` full screen · `M` mute mic · `C` chat. |
@@ -215,6 +215,7 @@ mobile data and want call-quality voice, add a TURN relay — it takes about 5 m
 | `npm run optimize` | Prepare all new movies for adaptive streaming |
 | `npm run optimize -- --force` | Re-do movies that were already prepared — safe mid-movie: viewers switch to the new version when it's ready |
 | `npm run optimize -- --cpu` | Skip GPU encoders (a failed GPU encode already retries on the CPU by itself) |
+| `npm run optimize -- --clean` | Delete optimized copies of movies you've deleted, renamed or moved (frees the disk space) |
 
 Settings go in a **`.env`** file in the project folder (copy `.env.example`), or as environment variables
 (`$env:PASSCODE="246810"` in PowerShell before `npm start`):
@@ -272,6 +273,15 @@ playing until the new one is done) and refuses to run twice on the same movie at
 </details>
 
 <details>
+<summary><b>Removing a movie</b></summary>
+
+Delete the file (and any `.srt` next to it) from `movies`, then run `npm run optimize -- --clean` to remove its
+optimized copy from `prepared` (that's where most of the disk space is). Tap ↻ in the **Movies** tab, or just wait a few
+seconds — the list updates by itself. A movie file you *replace* with a different copy under the same name is
+re-optimized automatically on the next `npm run optimize`.
+</details>
+
+<details>
 <summary><b>Port already in use</b></summary>
 
 The server automatically moves to the next free port, or set `$env:PORT=9000`.
@@ -284,6 +294,7 @@ Movie-Night/
 ├── server.js              # Express + Socket.IO: auth, streaming, room sync, voice signaling, tunnel
 ├── optimize.js            # ffmpeg → multi-quality HLS + subtitles (GPU-accelerated when available)
 ├── lib/library.js         # movie discovery, clean titles, prepared-stream lookup
+├── .env.example           # optional settings (passcode, port, TURN) — copy to .env
 ├── public/
 │   ├── index.html         # app shell + icons
 │   ├── styles.css         # responsive UI (phone portrait/landscape, tablet, desktop)

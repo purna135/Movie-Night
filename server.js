@@ -50,15 +50,21 @@ const movies = (fresh = false) => {
 // Without TURN, voice falls back to the built-in relay through this server.
 const iceServers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
 const TURN_URLS = String(process.env.TURN_URL || '').split(',').map((s) => s.trim()).filter(Boolean);
-if (TURN_URLS.length) {
+const TURN_OK = TURN_URLS.length > 0 && !!process.env.TURN_USER && !!process.env.TURN_PASS;
+if (TURN_OK) {
   iceServers.push({ urls: TURN_URLS, username: process.env.TURN_USER, credential: process.env.TURN_PASS });
+} else if (TURN_URLS.length) {
+  console.log('⚠  TURN_URL is set but TURN_USER / TURN_PASS are missing — ignoring TURN (voice still works).');
 }
 
 // ---------- HTTP ----------
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', true);
-app.use(compression()); // gzips html/js/css/playlists; video is left alone
+// gzips html/js/css and HLS playlists (a 2 h movie's playlist is ~75 KB raw); video segments are left alone
+app.use(compression({
+  filter: (req, res) => /mpegurl/i.test(String(res.getHeader('Content-Type') || '')) || compression.filter(req, res),
+}));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0 })); // revalidate (cheap 304s) so updates show up
 app.get('/vendor/hls.min.js', (req, res) =>
@@ -74,18 +80,23 @@ function auth(req, res, next) {
   next();
 }
 
-let failed = 0;
-let lockedUntil = 0;
+// Wrong-passcode lockout per device (Cloudflare passes the visitor's address), so a stranger guessing
+// codes can't lock your friends out.
+const attempts = new Map(); // ip -> { failed, until }
 app.post('/api/join', (req, res) => {
-  if (Date.now() < lockedUntil) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
+  const ip = req.get('cf-connecting-ip') || req.ip || 'local';
+  const a = attempts.get(ip) || { failed: 0, until: 0 };
+  if (Date.now() < a.until) return res.status(429).json({ error: 'Too many attempts. Try again in a minute.' });
   // Compare fixed-length hashes: constant time, and no crash when the lengths differ in bytes.
   const hash = (s) => crypto.createHash('sha256').update(s).digest();
   const ok = crypto.timingSafeEqual(hash(String(req.body?.code || '').trim()), hash(PASSCODE));
   if (!ok) {
-    if (++failed >= 15) { lockedUntil = Date.now() + 60_000; failed = 0; }
+    if (++a.failed >= 10) Object.assign(a, { until: Date.now() + 60_000, failed: 0 });
+    if (attempts.size > 1000) attempts.clear();
+    attempts.set(ip, a);
     return res.status(401).json({ error: 'Wrong passcode' });
   }
-  failed = 0;
+  attempts.delete(ip);
   res.cookie(COOKIE, TOKEN, { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: 7 * 864e5 });
   res.json({ token: TOKEN, iceServers });
 });
@@ -120,7 +131,7 @@ app.get('/subs/*', auth, (req, res) => {
 
 // Every optimize run writes a new build folder (/hls/<movie>/<build>/…), so files never change in
 // place and phones can cache them hard.
-app.use('/hls', auth, express.static(lib.PREPARED_DIR, {
+app.use('/hls', auth, (req, res, next) => (/\.(json|lock|tmp)$/i.test(req.path) ? res.status(404).end() : next()), express.static(lib.PREPARED_DIR, {
   maxAge: '7d',
   immutable: true,
   setHeaders(res, file) {
@@ -145,11 +156,20 @@ room.movie = PRESELECT ? lib.toId(PRESELECT) : movies()[0]?.id || null;
 const position = () => (room.playing ? room.time + (Date.now() - room.updatedAt) / 1000 : room.time);
 const snapshot = (extra = {}) => ({ movie: room.movie, playing: room.playing, time: position(), serverNow: Date.now(), ...extra });
 const publicUsers = () => [...users.values()].map(({ clientId, ...u }) => u);
-const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, n);
+const str = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+const clean = (s, n) => str(s).replace(/[\u0000-\u001f]/g, '').trim().slice(0, n);
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : NaN);
 
 function setRoom(patch, extra) {
   Object.assign(room, patch, { updatedAt: Date.now() });
   io.emit('state', snapshot(extra));
+}
+
+// If the room's movie was deleted or renamed, move to the first movie (or none).
+function ensureRoomMovie(list) {
+  if (room.movie && list.some((m) => m.id === room.movie)) return;
+  const next = list[0]?.id || null;
+  if (next !== room.movie) setRoom({ movie: next, playing: false, time: 0, autoPaused: false }, { action: 'select' });
 }
 
 // presence = the person's name for "joined"/"left" lines. A phone that drops in and out
@@ -164,25 +184,41 @@ function system(text, presence = null) {
   io.emit('chat', msg);
 }
 
-// "Wait for everyone": if someone is buffering while playing, pause the room
-// at their position, then resume automatically once nobody is buffering.
+// "Wait for everyone": if someone is buffering while playing, pause the room at their position,
+// then resume automatically once nobody is buffering. Someone stuck for longer than WAIT_LIMIT
+// (very slow link, a phone that can't play the file) is no longer waited for, so the room moves on.
+// Runs on every status update and on a 3 s timer (so grace periods and limits are re-checked).
+const WAIT_LIMIT = 45_000;
 let waitTimer = null;
+const buffering = () => [...users.values()].filter((u) => u.status === 'buffering' && Date.now() - (u.bufferingSince || 0) < WAIT_LIMIT);
 function checkBuffering() {
-  const stuck = [...users.values()].filter((u) => u.status === 'buffering');
+  if (!users.size) { // everyone left (or the host's connection dropped): hold the movie where it is
+    clearTimeout(waitTimer);
+    waitTimer = null;
+    if (room.playing || room.autoPaused) Object.assign(room, { time: position(), playing: false, autoPaused: false, updatedAt: Date.now() });
+    return;
+  }
+  const stuck = buffering();
   if (!stuck.length) {
     clearTimeout(waitTimer);
     waitTimer = null;
-    if (room.autoPaused) setRoom({ playing: true, autoPaused: false }, { action: 'resume' });
+    if (room.autoPaused) {
+      const gaveUp = [...users.values()].filter((u) => u.status === 'buffering').map((u) => u.name);
+      setRoom({ playing: true, autoPaused: false }, { action: 'resume', gaveUp });
+    }
     return;
   }
   if (room.autoPaused) return io.emit('waiting', stuck.map((u) => u.name));
   if (!room.playing || waitTimer || Date.now() < room.ignoreWaitUntil) return;
   waitTimer = setTimeout(() => {
     waitTimer = null;
-    const still = [...users.values()].filter((u) => u.status === 'buffering');
+    const still = buffering();
     if (!room.playing || !still.length || Date.now() < room.ignoreWaitUntil) return;
-    const times = still.map((u) => u.time).filter(Number.isFinite);
-    const t = times.length ? Math.min(position(), ...times) : position();
+    // Pause where the slowest viewer is — but ignore positions far behind the room (a phone that's
+    // just (re)loading the video reports 0 or a stale time; that must never rewind everyone).
+    const now = position();
+    const times = still.map((u) => u.time).filter((t) => Number.isFinite(t) && t > now - 15);
+    const t = times.length ? Math.min(now, ...times) : now;
     setRoom({ playing: false, time: Math.max(0, t), autoPaused: true }, { action: 'wait', waitingFor: still.map((u) => u.name) });
   }, 2500);
 }
@@ -192,7 +228,22 @@ io.use((socket, next) => {
   next();
 });
 
-io.on('connection', (socket) => {
+io.on('connection', (raw) => {
+  // Every handler gets an object payload (null/strings become {}) and runs inside try/catch:
+  // Socket.IO calls handlers outside any try, so one throw would otherwise kill the server
+  // (new passcode, new link, everyone kicked out).
+  const socket = {
+    id: raw.id,
+    get broadcast() { return raw.broadcast; },
+    emit: (...a) => raw.emit(...a),
+    on: (event, fn) => raw.on(event, (first, ...rest) => {
+      try {
+        fn(event === 'clock' || (first && typeof first === 'object') ? first : {}, ...rest);
+      } catch (err) {
+        console.warn(`⚠  Ignored a bad "${event}" message: ${err.message}`);
+      }
+    }),
+  };
   socket.on('join', ({ name, clientId } = {}) => {
     const cid = clean(clientId, 64) || socket.id;
     // Drop a stale socket from the same device (reconnect on a flaky network, before the server has
@@ -210,7 +261,11 @@ io.on('connection', (socket) => {
     users.set(socket.id, user);
     const { clientId: _, ...me } = user;
     const list = movies();
-    if (!room.movie && list[0]) Object.assign(room, { movie: list[0].id, playing: false, time: 0, updatedAt: Date.now() });
+    if (!room.movie && list[0]) {
+      // First movie just appeared: start it for everyone already here too, not only the newcomer.
+      Object.assign(room, { movie: list[0].id, playing: false, time: 0, updatedAt: Date.now() });
+      socket.broadcast.emit('state', snapshot({ action: 'select' }));
+    }
     socket.emit('welcome', { me, movies: list, state: snapshot(), history });
     io.emit('users', publicUsers());
     const seen = recent.get(cid);
@@ -223,7 +278,7 @@ io.on('connection', (socket) => {
   socket.on('control', ({ action, time } = {}) => {
     const user = users.get(socket.id);
     if (!user || !room.movie) return;
-    const t = Number.isFinite(time) ? Math.max(0, time) : position();
+    const t = Number.isFinite(num(time)) ? Math.max(0, time) : position();
     if (action === 'play') setRoom({ time: t, playing: true, autoPaused: false, ignoreWaitUntil: Date.now() + 8000 }, { by: user.name, byId: user.id, action });
     else if (action === 'pause') setRoom({ time: t, playing: false, autoPaused: false }, { by: user.name, byId: user.id, action });
     else if (action === 'seek') setRoom({ time: t }, { by: user.name, byId: user.id, action });
@@ -238,11 +293,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('refresh-movies', () => {
-    const list = movies(true);
+    if (!users.has(socket.id)) return;
+    const list = movies(Date.now() - moviesCache.at > 1000); // rescan at most once a second, however often it's tapped
     io.emit('movies', list);
-    if ((!room.movie || !list.some((m) => m.id === room.movie)) && list[0]) {
-      setRoom({ movie: list[0].id, playing: false, time: 0, autoPaused: false }, { action: 'select' });
-    }
+    ensureRoomMovie(list);
   });
 
   socket.on('chat', ({ text } = {}) => {
@@ -270,8 +324,9 @@ io.on('connection', (socket) => {
     const user = users.get(socket.id);
     if (!user || !['playing', 'paused', 'buffering'].includes(status)) return;
     const changed = user.status !== status || user.quality !== (quality || null);
+    if (status === 'buffering' && user.status !== 'buffering') user.bufferingSince = Date.now();
     user.status = status;
-    user.time = Number(time);
+    user.time = num(time);
     user.quality = quality ? clean(quality, 12) : null;
     if (changed) io.emit('users', publicUsers());
     checkBuffering();
@@ -330,14 +385,14 @@ io.on('connection', (socket) => {
       const back = [...users.values()].some((u) => u.clientId === user.clientId);
       if (!back) system(`${user.name} left`, user.name);
     }, 15_000);
-    if (users.size === 0 && room.playing) { room.time = position(); room.playing = false; room.updatedAt = Date.now(); }
     checkBuffering();
   });
 });
 
-// Periodic drift correction
+// Periodic drift correction + re-check "wait for everyone"
 setInterval(() => {
   if (room.playing && users.size) io.emit('sync', snapshot());
+  checkBuffering();
 }, 3000);
 
 // When `npm run optimize` finishes (or a movie is added) while people are watching, push the new
@@ -349,10 +404,15 @@ setInterval(() => {
   const sig = JSON.stringify(list.map((m) => [m.id, m.hls, m.subs.length]));
   if (librarySig && sig !== librarySig) {
     io.emit('movies', list);
+    ensureRoomMovie(list);
     if (list.some((m) => m.id === room.movie && m.hls)) console.log('⚡ Optimized version ready — viewers switched to adaptive quality.');
   }
   librarySig = sig;
 }, 10000);
+
+// A crash would change the passcode/link and kick everyone out, so log unexpected errors and keep going.
+process.on('uncaughtException', (err) => console.error('⚠  Unexpected error (server keeps running):', err));
+process.on('unhandledRejection', (err) => console.error('⚠  Unexpected error (server keeps running):', err));
 
 // ---------- Startup ----------
 function lanAddress() {
@@ -383,7 +443,7 @@ function banner(url) {
   console.log('');
   console.log(`  (Passcode ${PASSCODE} is already inside the link — they just enter their name.)`);
   console.log(`  Movies:    ${list.length} in ${MOVIES_DIR}`);
-  console.log(`  Voice:     direct + ${TURN_URLS.length ? `TURN relay ✓ (${TURN_URLS.length} address${TURN_URLS.length > 1 ? 'es' : ''})` : 'built-in relay (add TURN in .env for better quality — see README)'}`);
+  console.log(`  Voice:     direct + ${TURN_OK ? `TURN relay ✓ (${TURN_URLS.length} address${TURN_URLS.length > 1 ? 'es' : ''})` : 'built-in relay (add TURN in .env for better quality — see README)'}`);
   const slow = list.filter((m) => !m.hls);
   if (slow.length) console.log(`  Tip:       ${slow.length} not optimized for slow networks — run: npm run optimize`);
   console.log(`└${line}┘\n`);

@@ -6,6 +6,7 @@
 //   npm run optimize -- "D:\Movies"        -> every movie in that folder
 //   npm run optimize -- "D:\Movies\x.mkv"  -> just that file
 //   add --force to rebuild (safe while people are watching), --cpu to skip GPU encoders
+//   npm run optimize -- --clean            -> delete optimized copies of movies that no longer exist
 
 const { spawn, spawnSync } = require('child_process');
 const path = require('path');
@@ -16,6 +17,7 @@ const lib = require('./lib/library');
 const args = process.argv.slice(2);
 const FORCE = args.includes('--force');
 const CPU_ONLY = args.includes('--cpu');
+const CLEAN = args.includes('--clean');
 const { dir, file } = lib.resolveLibrary(args.find((a) => !a.startsWith('--')));
 
 // Keep the movie's ORIGINAL sound — just folded to stereo (a compact stereo track keeps the low-data
@@ -30,6 +32,8 @@ function stereoMix(channels) {
   if (channels >= 8) {
     return 'pan=stereo|FL=c0+0.707*c2+0.6*c3+0.707*c4+0.707*c6|FR=c1+0.707*c2+0.6*c3+0.707*c5+0.707*c7';
   }
+  // 6.1 = FL FR FC LFE BC SL SR (the back-centre goes to both sides)
+  if (channels === 7) return 'pan=stereo|FL=c0+0.707*c2+0.6*c3+0.5*c4+0.707*c5|FR=c1+0.707*c2+0.6*c3+0.5*c4+0.707*c6';
   if (channels >= 6) return 'pan=stereo|FL=c0+0.707*c2+0.6*c3+0.707*c4|FR=c1+0.707*c2+0.6*c3+0.707*c5';
   if (channels === 1) return 'pan=stereo|FL=c0|FR=c0';
   return 'aformat=channel_layouts=stereo';
@@ -127,6 +131,7 @@ function run(argv, duration, label) {
   return new Promise((resolve, reject) => {
     const p = spawn(FFMPEG, argv, { windowsHide: true });
     child = p;
+    p.on('error', reject);
     const started = Date.now();
     let err = '';
     p.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
@@ -173,11 +178,14 @@ function run(argv, duration, label) {
 async function optimize(rel, encoder) {
   const input = path.join(dir, rel);
   const info = lib.preparedInfo(input);
-  if (info.ready && !FORCE) {
+  const st = fs.statSync(input);
+  const changed = info.ready && info.sourceSize && (info.sourceSize !== st.size || info.sourceMtime !== Math.round(st.mtimeMs));
+  if (info.ready && !FORCE && !changed) {
     console.log(`✓ Already optimized: ${rel}`);
     return;
   }
   console.log(`\n▶ ${rel}`);
+  if (changed && !FORCE) console.log('  The file changed since it was optimized — rebuilding.');
 
   // Refuse to run twice on the same movie (two windows would fight over the same folder).
   const lock = path.join(lib.PREPARED_DIR, `${info.key}.lock`);
@@ -212,7 +220,11 @@ async function build(input, info, encoder) {
   const fps = n && d ? n / d : 24;
   const gop = Math.max(24, Math.round(fps * 4));
 
-  let ladder = LADDER.filter((r) => r.w <= (video.width || 1280) + 16);
+  // Non-square pixels (DVDs, some TV rips): work out the width the picture is really shown at.
+  const [sx, sy] = String(video.sample_aspect_ratio || '1:1').split(':').map(Number);
+  const sar = sx > 0 && sy > 0 ? sx / sy : 1;
+  const shownWidth = Math.round((video.width || 1280) * sar);
+  let ladder = LADDER.filter((r) => r.w <= shownWidth + 16);
   if (ladder.length < 2) ladder = LADDER.slice(-2);
 
   const buildId = `b${Date.now()}`;
@@ -224,12 +236,13 @@ async function build(input, info, encoder) {
   // Downscale once to the top rung, then derive the smaller rungs from that (much cheaper than 4x from 1080p/4K).
   const top = ladder[0].w;
   const scales = ladder.map((r, i) => (i === 0 ? `[s0]null[v0]` : `[s${i}]scale=${r.w}:-2:flags=bicubic,setsar=1[v${i}]`)).join(';');
-  let graph = `[0:${video.index}]scale='min(${top},iw)':-2:flags=bicubic,setsar=1,format=yuv420p,split=${ladder.length}${split};${scales}`;
+  const square = Math.abs(sar - 1) > 0.01 ? `scale='trunc(iw*sar/2)*2':ih,setsar=1,` : '';
+  let graph = `[0:${video.index}]${square}scale='min(${top},iw)':-2:flags=bicubic,setsar=1,format=yuv420p,split=${ladder.length}${split};${scales}`;
   if (audio) {
     // One audio chain (original sound folded to stereo + peak-only limiter), split to every quality level.
     // level=0 stops alimiter from auto-raising the volume, so loudness and dynamics stay as in the movie.
     const outs = ladder.map((_, i) => `[a${i}]`).join('');
-    graph += `;[0:${audio.index}]${stereoMix(audio.channels)},alimiter=limit=0.97:level=0,aresample=48000,asplit=${ladder.length}${outs}`;
+    graph += `;[0:${audio.index}]aformat=sample_fmts=fltp,${stereoMix(audio.channels)},alimiter=limit=0.97:level=0,aresample=48000,asplit=${ladder.length}${outs}`;
   }
   const argv = ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:1'];
   if (encoder !== 'libx264') argv.push('-hwaccel', 'auto'); // GPU decoding (big win for HEVC / 10-bit); CPU mode stays pure CPU
@@ -292,10 +305,16 @@ async function build(input, info, encoder) {
   // Switch to the new build in one step, then remove the previous one.
   const readyTmp = path.join(info.dir, 'ready.json.tmp');
   fs.writeFileSync(readyTmp, JSON.stringify({
-    source: input, build: buildId, duration, qualities: ladder.map((r) => r.name),
+    source: input, sourceSize: fs.statSync(input).size, sourceMtime: Math.round(fs.statSync(input).mtimeMs),
+    build: buildId, duration, qualities: ladder.map((r) => r.name),
     subs: subs.map(({ file, label }) => ({ file, label })), createdAt: new Date().toISOString(),
   }, null, 2));
-  fs.renameSync(readyTmp, path.join(info.dir, 'ready.json'));
+  for (let i = 0; ; i++) {
+    try { fs.renameSync(readyTmp, path.join(info.dir, 'ready.json')); break; } catch (e) {
+      if (i >= 20) throw e; // ~10 s of "file in use" (antivirus, search indexer)
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
   console.log('  ✓ Done');
 
   const old = fs.readdirSync(info.dir).filter((e) => e !== buildId && e !== 'ready.json');
@@ -313,7 +332,46 @@ function removeQuietly(p) {
   try { fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch {}
 }
 
+// Optimized copies are kept per movie file. When a movie is deleted, renamed or moved, its copy
+// (often several GB) stays behind; --clean removes those.
+function clean() {
+  let removed = 0, freed = 0;
+  const size = (p) => {
+    try {
+      const st = fs.statSync(p);
+      return st.isDirectory() ? fs.readdirSync(p).reduce((a, e) => a + size(path.join(p, e)), 0) : st.size;
+    } catch { return 0; }
+  };
+  for (const e of fs.existsSync(lib.PREPARED_DIR) ? fs.readdirSync(lib.PREPARED_DIR, { withFileTypes: true }) : []) {
+    const d = path.join(lib.PREPARED_DIR, e.name);
+    if (!e.isDirectory()) {
+      if (e.name.endsWith('.lock') && !alive(Number(fs.readFileSync(d, 'utf8')))) removeQuietly(d); // stale lock
+      continue;
+    }
+    let source = null;
+    try { source = JSON.parse(fs.readFileSync(path.join(d, 'ready.json'), 'utf8')).source; } catch {}
+    const lock = d + '.lock';
+    if (fs.existsSync(lock) && alive(Number(fs.readFileSync(lock, 'utf8')))) continue; // being optimized now
+    if (source && fs.existsSync(source)) continue;
+    if (source && !fs.existsSync(path.parse(source).root)) { // e.g. a USB drive that's just unplugged
+      console.log(`  (keeping ${e.name} — its drive ${path.parse(source).root} isn't connected)`);
+      continue;
+    }
+    const bytes = size(d);
+    console.log(`  🗑  ${e.name}  (${human(bytes)}${source ? '' : ', unfinished'})`);
+    removeQuietly(d);
+    removed++;
+    freed += bytes;
+  }
+  console.log(removed ? `\nRemoved ${removed} leftover folder(s), freed ${human(freed)}.` : 'Nothing to clean — every optimized copy belongs to a movie that still exists.');
+}
+
+function human(bytes) {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+}
+
 (async () => {
+  if (CLEAN) return clean();
   const list = file ? [file] : lib.listMovies(dir).map((m) => m.id.split('/').join(path.sep));
   if (!list.length) {
     console.log(`No movies found in ${dir}`);

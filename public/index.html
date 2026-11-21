@@ -128,7 +128,7 @@
             </div>
           </div>
           <div class="menu" id="menu" hidden></div>
-          <div class="toast" id="toast" hidden></div>
+          <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
         </div>
       </section>
 
@@ -179,7 +179,7 @@
   </div>
 
   <div class="modal" id="modal" hidden>
-    <div class="modal-card">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <h3 id="modalTitle"></h3>
       <p id="modalText"></p>
       <div class="modal-actions">

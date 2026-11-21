@@ -27,7 +27,7 @@
     joinBtn: $('#joinBtn'), joinErr: $('#joinErr'), codeNote: $('#codeNote'),
     app: $('#app'), nowTitle: $('#nowTitle'), net: $('#net'), netText: $('#netText'),
     voiceJoin: $('#voiceJoin'), voiceOn: $('#voiceOn'), micBtn: $('#micBtn'), voiceLeave: $('#voiceLeave'),
-    player: $('#player'), video: $('#video'), controls: $('#controls'), reactions: $('#reactions'), ticker: $('#ticker'),
+    player: $('#player'), video: $('#video'), reactions: $('#reactions'), ticker: $('#ticker'),
     centerMsg: $('#centerMsg'), centerText: $('#centerText'), tapSync: $('#tapSync'), empty: $('#emptyState'),
     cTitle: $('#cTitle'), cMic: $('#cMic'), cChat: $('#cChat'), cChatBadge: $('#cChatBadge'),
     playBtn: $('#playBtn'), back10: $('#back10'), fwd10: $('#fwd10'),
@@ -35,7 +35,7 @@
     curTime: $('#curTime'), durTime: $('#durTime'), muteBtn: $('#muteBtn'), volume: $('#volume'),
     reactBtn: $('#reactBtn'), reactStrip: $('#reactStrip'), ccBtn: $('#ccBtn'), qualityBtn: $('#qualityBtn'), qualityLabel: $('#qualityLabel'),
     fsBtn: $('#fsBtn'), menu: $('#menu'), toast: $('#toast'), subs: $('#subs'),
-    panel: $('#panel'), panelClose: $('#panelClose'), chatBadge: $('#chatBadge'), peopleCount: $('#peopleCount'),
+    panelClose: $('#panelClose'), chatBadge: $('#chatBadge'), peopleCount: $('#peopleCount'),
     messages: $('#messages'), typing: $('#typing'), people: $('#people'), movies: $('#movies'), moviesCount: $('#moviesCount'),
     refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), sendBtn: $('#sendBtn'), kbFloat: $('#kbFloat'), kbReacts: $('#kbReacts'), quickReacts: $('#quickReacts'),
     modal: $('#modal'), modalTitle: $('#modalTitle'), modalText: $('#modalText'), modalOk: $('#modalOk'), modalCancel: $('#modalCancel'),
@@ -45,15 +45,21 @@
   const REACTS = ['😂', '😮', '😍', '🔥', '👏', '😭', '💀', '🍿'];
 
   // Per-tab identity: survives refreshes/reconnects, but two tabs = two viewers.
+  function newClientId() {
+    const id = (crypto.randomUUID && crypto.randomUUID()) || Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try { sessionStorage.setItem('mn:cid', id); } catch {}
+    return id;
+  }
   let clientId = null;
   try { clientId = sessionStorage.getItem('mn:cid'); } catch {}
-  if (!clientId) {
-    clientId = (crypto.randomUUID && crypto.randomUUID()) || Math.random().toString(36).slice(2) + Date.now().toString(36);
-    try { sessionStorage.setItem('mn:cid', clientId); } catch {}
-  }
+  if (!clientId) clientId = newClientId();
 
   // ---------- App state ----------
-  let session = null, socket = null, me = null, myName = '', linkHadCode = false;
+  let session = null, socket = null, me = null, myName = '', linkHadCode = false, joined = false;
+  // Connected *and* welcomed. Socket.IO replays anything emitted while offline *before* our 'join'
+  // reaches the server, which then ignores it — so actions are only sent while live().
+  const live = () => !!socket?.connected && joined;
+  const OFFLINE = 'Reconnecting… try again in a moment';
   let users = [], movies = [], state = null, current = null, hls = null, sourceKind = null;
   let clockOffset = 0, bestRtt = Infinity, latency = 0;
   let waitMode = false, waitingNames = [];
@@ -67,7 +73,7 @@
     return state.playing ? state.time + Math.max(0, serverNow() - state.serverNow) / 1000 : state.time;
   };
   const duration = () => (Number.isFinite(video.duration) && video.duration > 0 ? video.duration : current?.duration || 0);
-  const isLoading = () => !!current && (video.seeking || video.readyState < 3);
+  const isLoading = () => !!current && !video.error && (video.seeking || video.readyState < 3);
   const immersive = () => el.app.classList.contains('immersive');
 
   // ---------- Join ----------
@@ -76,6 +82,7 @@
     if (params.get('code')) {
       // Shared link has the passcode built in: fill it, hide the field, just ask for a name.
       el.codeInput.value = params.get('code');
+      try { sessionStorage.setItem('mn:code', params.get('code')); } catch {}
       linkHadCode = true;
       hideCodeField();
       el.joinErr.textContent = '';
@@ -146,6 +153,7 @@
 
   function backToJoin(msg) {
     session = null;
+    joined = false;
     socket?.disconnect();
     socket = null;
     teardownVoice();
@@ -156,9 +164,14 @@
     me = null;
     el.app.hidden = true;
     el.join.hidden = false;
-    el.codeField.hidden = false;
-    el.codeInput.required = true;
-    el.codeInput.value = '';
+    // Came in through a share link? Try its passcode again (it still works if PASSCODE is fixed in .env);
+    // if it's outdated, the join handler reveals the passcode field.
+    let saved = null;
+    try { saved = sessionStorage.getItem('mn:code'); } catch {}
+    linkHadCode = !!saved;
+    el.codeInput.value = saved || '';
+    el.codeNote.hidden = !saved;
+    if (saved) hideCodeField(); else { el.codeField.hidden = false; el.codeInput.required = true; }
     el.joinBtn.disabled = false;
     el.joinBtn.querySelector('span').textContent = 'Join the room';
     el.joinErr.textContent = msg || '';
@@ -175,7 +188,16 @@
       syncClock(5);
       updateNet();
     });
-    socket.on('disconnect', () => updateNet());
+    socket.on('disconnect', (reason) => {
+      joined = false;
+      updateNet();
+      // The server only drops a connection itself when another tab took over this tab's identity
+      // (e.g. Chrome's "Duplicate tab" copies it). Become a separate viewer and reconnect.
+      if (reason === 'io server disconnect') {
+        clientId = newClientId();
+        socket.connect();
+      }
+    });
     socket.on('connect_error', (err) => {
       if (err.message === 'unauthorized') backToJoin('The room was restarted — enter the new passcode.');
       updateNet();
@@ -183,8 +205,10 @@
 
     socket.on('welcome', ({ me: m, movies: list, state: s, history: past }) => {
       me = m;
-      el.messages.innerHTML = '';
+      joined = true;
+      lastStatus = ''; // this connection starts from scratch on the server: re-send our status
       lastMsg = { uid: null, ts: 0 };
+      el.messages.innerHTML = '';
       past.forEach((msg) => addMessage(msg, true));
       showApp();
       // A reconnect (flaky network) keeps the loaded video and its buffer; only a changed source reloads.
@@ -272,7 +296,10 @@
     if (!quiet) {
       if (s.action && s.byId && s.byId !== me?.id && ACTION_TEXT[s.action]) toast(ACTION_TEXT[s.action](s.by, s.time));
       if (s.action === 'wait') toast(`⏳  Waiting for ${waitingNames.join(', ')} to catch up`);
-      if (s.action === 'resume') toast('▶  Everyone caught up');
+      if (s.action === 'resume') {
+        const gaveUp = (s.gaveUp || []).filter((n) => n !== myName);
+        toast(gaveUp.length ? `▶  Continuing — ${gaveUp.join(', ')} will catch up` : '▶  Everyone caught up');
+      }
     }
     updateCenter();
   }
@@ -324,7 +351,7 @@
     if (!state || !socket) return;
     // Offline: Socket.IO would queue this and replay it after reconnecting, yanking the whole room
     // back to where this viewer was. Drop it — on reconnect this phone snaps to the room instead.
-    if (!socket.connected) { toast('Reconnecting… try again in a moment'); return; }
+    if (!live()) { toast(OFFLINE); return; }
     const now = serverNow();
     if (action === 'play') state = { ...state, playing: true, time: t, serverNow: now };
     else if (action === 'pause') state = { ...state, playing: false, time: t, serverNow: now };
@@ -335,7 +362,13 @@
 
   function togglePlay() {
     if (!current || !state) return;
-    if (!socket?.connected) return toast('Reconnecting… try again in a moment');
+    if (!live()) return toast(OFFLINE);
+    // Room is playing but this video isn't (autoplay blocked, stalled): "play" means join in, not pause everyone.
+    if (state.playing && video.paused) {
+      el.tapSync.hidden = true;
+      if (Math.abs(video.currentTime - expected()) > 1.2) seekTo(expected());
+      tryPlay(); showControls(); return;
+    }
     if (state.playing) { sendControl('pause'); video.pause(); }
     else { sendControl('play'); tryPlay(); }
     showControls();
@@ -343,7 +376,7 @@
 
   function skip(delta) {
     if (!current) return;
-    if (!socket?.connected) return toast('Reconnecting… try again in a moment');
+    if (!live()) return toast(OFFLINE);
     const t = clamp(video.currentTime + delta, 0, Math.max(0, duration() - 1));
     sendControl('seek', t);
     seekTo(t);
@@ -394,7 +427,8 @@
     el.centerText.innerHTML = fixable
       ? 'This browser can’t play this file’s format.<br>On the host PC run <b>npm run optimize</b>, then refresh Movies.'
       : 'Playback error. Retrying…';
-    if (!fixable) setTimeout(() => current && loadMovie(current), 2000);
+    const failed = current;
+    if (!fixable) setTimeout(() => { if (current === failed) loadMovie(current); }, 2000);
   });
 
   document.addEventListener('visibilitychange', () => {
@@ -402,19 +436,23 @@
     // Back from background: snap to the room.
     if (state?.playing) applyState();
     if (!video.paused) keepAwake(true);
+    updateUnread();
   });
 
   // Status for "wait for everyone"
   let lastStatus = '';
   function reportStatus() {
-    if (!socket?.connected || !current) return;
+    if (!live() || !current) return;
     const loading = isLoading() && !document.hidden && el.tapSync.hidden;
     const status = (state?.playing || waitMode) && loading ? 'buffering' : video.paused ? 'paused' : 'playing';
     const quality = qualityText();
     const key = status + quality;
     if (key === lastStatus) return;
     lastStatus = key;
-    socket.emit('status', { status, time: video.currentTime, quality });
+    // While a source is (re)loading, currentTime is 0 — report where the room is instead, so the
+    // server never pauses everyone at 0:00 because of this viewer.
+    const time = video.readyState < 1 ? expected() : video.currentTime;
+    socket.emit('status', { status, time, quality });
   }
   setInterval(reportStatus, 1000);
 
@@ -477,12 +515,15 @@
     el.ccBtn.hidden = !m?.subs?.length;
   }
 
-  // Title + play/pause/±10 s on the lock screen and in the notification shade. The resulting
-  // play/pause events go through the normal handlers below, so they're shared with the room.
+  // Title + play/pause/±10 s on the lock screen and in the notification shade, shared with the room.
+  // (A plain "pause" event while the page is hidden is ignored — that's usually the phone backgrounding
+  // the video — so lock-screen buttons get explicit handlers.)
   function updateMediaSession(m) {
     if (!('mediaSession' in navigator)) return;
     try {
       navigator.mediaSession.metadata = m ? new MediaMetadata({ title: m.name, artist: 'Movie Night' }) : null;
+      navigator.mediaSession.setActionHandler('play', () => { if (!state?.playing || video.paused) togglePlay(); });
+      navigator.mediaSession.setActionHandler('pause', () => { if (state?.playing) togglePlay(); else video.pause(); });
       navigator.mediaSession.setActionHandler('seekbackward', () => skip(-10));
       navigator.mediaSession.setActionHandler('seekforward', () => skip(10));
     } catch {}
@@ -516,16 +557,20 @@
         updateQualityLabel();
       });
       hls.on(Hls.Events.LEVEL_SWITCHED, () => { updateQualityLabel(); reportStatus(); });
+      const inst = hls;
+      const reloadSame = (ms) => setTimeout(() => { if (hls === inst && current?.id === m.id) loadMovie(current); }, ms);
       hls.on(Hls.Events.ERROR, (_, d) => {
         if (!d.fatal) return;
-        if (d.type === Hls.ErrorTypes.NETWORK_ERROR) setTimeout(() => hls && hls.startLoad(), 1500);
-        else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else { toast('Playback hiccup — reloading'); setTimeout(() => current && loadMovie(current), 1000); }
+        const manifest = /manifest/i.test(d.details || '');
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR && !manifest) setTimeout(() => { if (hls === inst) inst.startLoad(); }, 1500);
+        else if (d.type === Hls.ErrorTypes.NETWORK_ERROR) reloadSame(3000); // startLoad() doesn't re-fetch the playlist
+        else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) inst.recoverMediaError();
+        else { toast('Playback hiccup — reloading'); reloadSame(1000); }
       });
       hls.loadSource(m.hls);
       hls.attachMedia(video);
     } else if (m.hls && !original && video.canPlayType('application/vnd.apple.mpegurl')) {
-      sourceKind = 'native-hls'; // iPhone / Safari: built-in adaptive streaming
+      sourceKind = 'native-hls'; // older iPhones (hls.js covers iOS 17.1+): built-in adaptive streaming
       video.src = m.hls;
     } else {
       sourceKind = 'direct';
@@ -544,10 +589,13 @@
   function onMovies(list, quiet = false) {
     movies = list;
     const after = current && movies.find((m) => m.id === current.id);
-    if (after) {
+    if (!current && state?.movie && movies.some((m) => m.id === state.movie)) {
+      selectCurrent(state.movie); // the room's movie wasn't in our list yet (just added to the folder)
+    } else if (after) {
       const before = current;
       current = after;
-      if (after.hls !== before.hls) {
+      const onOriginal = sourceKind === 'direct' && store.get('quality', 'auto') === 'original';
+      if (after.hls !== before.hls && !onOriginal) {
         if (!quiet && after.hls && !before.hls) toast('⚡  Switched to adaptive quality');
         loadMovie(after);
       } else if (JSON.stringify(after.subs) !== JSON.stringify(before.subs)) {
@@ -591,7 +639,8 @@
     const cues = subTrack && subTrack.activeCues ? [...subTrack.activeCues] : [];
     el.subs.replaceChildren(...cues.map((c) => {
       const s = document.createElement('span');
-      s.textContent = String(c.text || '').replace(/<[^>]+>/g, '').replace(/\{\\[^}]*\}/g, '');
+      const text = typeof c.getCueAsHTML === 'function' ? c.getCueAsHTML().textContent : String(c.text || '').replace(/<[^>]+>/g, '');
+      s.textContent = text.replace(/\{\\[^}]*\}/g, ''); // leftover ASS styling like {\an8}
       return s;
     }));
     el.subs.hidden = !cues.length;
@@ -721,13 +770,15 @@
     el.seekTip.style.left = `${d ? (v / d) * 100 : 0}%`;
   }
   el.seek.addEventListener('input', () => { dragging = true; el.seekWrap.classList.add('drag'); seekPreview(); showControls(); });
+  const endDrag = () => { dragging = false; el.seekWrap.classList.remove('drag'); el.seekTip.hidden = true; updateTime(); };
   el.seek.addEventListener('change', () => {
-    dragging = false;
-    el.seekWrap.classList.remove('drag');
-    el.seekTip.hidden = true;
+    endDrag();
     const t = Number(el.seek.value);
     if (current) { sendControl('seek', t); seekTo(t); }
   });
+  for (const ev of ['pointerup', 'pointercancel', 'touchcancel']) {
+    el.seek.addEventListener(ev, () => setTimeout(() => { if (dragging) endDrag(); }, 60));
+  }
   el.seekWrap.addEventListener('pointermove', (e) => {
     if (isTouch || dragging || !duration()) return;
     const r = el.seekWrap.getBoundingClientRect();
@@ -753,6 +804,7 @@
     store.set('volume', userVolume);
   }
   el.volume.addEventListener('input', () => setVolume(Number(el.volume.value)));
+  setVolume(userVolume);
   let lastVol = 1;
   el.muteBtn.addEventListener('click', () => {
     if (userVolume > 0) { lastVol = userVolume; setVolume(0); } else setVolume(lastVol || 1);
@@ -911,11 +963,16 @@
   // Keyboard (desktop)
   document.addEventListener('keydown', (e) => {
     if (el.app.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (!el.modal.hidden) { if (e.key === 'Escape') el.modalCancel.click(); return; }
+    if (!el.modal.hidden) {
+      if (e.key === 'Escape') el.modalCancel.click();
+      else if (e.key === 'Tab') { e.preventDefault(); (document.activeElement === el.modalOk ? el.modalCancel : el.modalOk).focus(); }
+      return;
+    }
     if (e.target.matches('input, textarea')) {
       if (e.key === 'Escape') e.target.blur();
       return;
     }
+    if ((e.key === ' ' || e.key === 'Enter') && e.target.closest('button, a, select, [role="button"], [tabindex]')) return;
     const k = e.key.toLowerCase();
     const map = {
       ' ': togglePlay, k: togglePlay,
@@ -930,17 +987,24 @@
   });
 
   // Keep phone screen awake while watching
-  let wakeLock = null;
+  let wakeLock = null, wakeWanted = false, wakePending = false;
   async function keepAwake(on) {
+    wakeWanted = on;
+    if (!('wakeLock' in navigator)) return;
     try {
-      if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
-        wakeLock = await navigator.wakeLock.request('screen');
-        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      if (on && !wakeLock && !wakePending && document.visibilityState === 'visible') {
+        wakePending = true;
+        const lock = await navigator.wakeLock.request('screen');
+        wakePending = false;
+        if (!wakeWanted) { lock.release().catch(() => {}); return; } // paused while we were asking
+        wakeLock = lock;
+        lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
       } else if (!on && wakeLock) {
-        await wakeLock.release();
+        const lock = wakeLock;
         wakeLock = null;
+        await lock.release();
       }
-    } catch {}
+    } catch { wakePending = false; }
   }
 
   // ---------- Panel ----------
@@ -970,7 +1034,7 @@
 
   const EMOJI_ONLY = /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|‍|️|\s){1,12}$/u;
   function addMessage(m, silent = false) {
-    const near = chatBody.scrollHeight - chatBody.scrollTop - chatBody.clientHeight < 120;
+    const near = !silent && chatBody.scrollHeight - chatBody.scrollTop - chatBody.clientHeight < 120;
     if (m.system) {
       // Same person joining/leaving again → replace their previous presence line instead of stacking.
       const prev = el.messages.lastElementChild;
@@ -1066,6 +1130,7 @@
   function sendMessage() {
     const text = el.msgInput.value.trim();
     if (!text || !socket) return;
+    if (!live()) return toast(OFFLINE); // the message stays in the box
     socket.emit('chat', { text });
     el.msgInput.value = '';
     autoGrow();
@@ -1134,25 +1199,34 @@
     if (!b || (current && current.id === b.dataset.id)) return;
     const m = movies.find((x) => x.id === b.dataset.id);
     if (await confirmModal('Switch movie?', `Play “${m.name}” for everyone in the room?`, 'Play for everyone')) {
+      if (!live()) return toast(OFFLINE);
       socket.emit('select', { id: m.id });
       if (immersive()) el.app.classList.remove('chat-open');
     }
   });
   el.refreshMovies.addEventListener('click', () => {
-    socket?.emit('refresh-movies');
+    if (live()) socket.emit('refresh-movies');
     el.refreshMovies.animate([{ transform: 'rotate(0)' }, { transform: 'rotate(360deg)' }], { duration: 600 });
   });
 
   function confirmModal(title, text, okText = 'OK') {
+    el.modalCancel.onclick?.(); // an older dialog still open counts as cancelled
+    const opener = document.activeElement;
     return new Promise((resolve) => {
       el.modalTitle.textContent = title;
       el.modalText.textContent = text;
       el.modalOk.textContent = okText;
       el.modal.hidden = false;
-      const done = (v) => { el.modal.hidden = true; el.modal.onclick = el.modalOk.onclick = el.modalCancel.onclick = null; resolve(v); };
+      const done = (v) => {
+        el.modal.hidden = true;
+        el.modal.onclick = el.modalOk.onclick = el.modalCancel.onclick = null;
+        opener?.focus?.({ preventScroll: true });
+        resolve(v);
+      };
       el.modalOk.onclick = () => done(true);
       el.modalCancel.onclick = () => done(false);
       el.modal.onclick = (e) => { if (e.target === el.modal) done(false); };
+      el.modalOk.focus({ preventScroll: true });
     });
   }
 
@@ -1164,8 +1238,13 @@
       toast(location.protocol === 'https:' ? 'Voice isn’t supported in this browser' : 'Voice chat needs the https:// link');
       return;
     }
+    if (voice.active || voice.joining) return; // second tap while the permission prompt is up
+    if (!live()) return toast(OFFLINE);
+    voice.joining = true;
+    el.voiceJoin.disabled = true;
+    let stream;
     try {
-      voice.stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
     } catch (err) {
       const msg = {
         NotAllowedError: '🎙  Microphone permission is blocked — allow it in the browser’s site settings',
@@ -1174,7 +1253,12 @@
       }[err.name] || 'Couldn’t access the microphone';
       toast(msg);
       return;
+    } finally {
+      voice.joining = false;
+      el.voiceJoin.disabled = false;
     }
+    if (!socket) { stream.getTracks().forEach((t) => t.stop()); return; } // sent back to the join screen meanwhile
+    voice.stream = stream;
     voice.active = true;
     voice.muted = false;
     ensureAudio();
@@ -1207,17 +1291,20 @@
   });
 
   // Re-open the mic with the new settings and hand the new track to every friend's connection.
+  let micGen = 0; // bumps on every swap/teardown, so a slower, older request never wins
   async function swapMic() {
+    const gen = ++micGen;
     // Release the old mic first: the phone only leaves call audio once no echo-cancelled mic is open.
     voice.stream?.getTracks().forEach((t) => t.stop());
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia(micConstraints());
     } catch {
+      if (gen !== micGen) return;
       toast('Couldn’t restart the microphone — rejoin voice');
       return leaveVoice();
     }
-    if (!voice.active) { stream.getTracks().forEach((t) => t.stop()); return; } // left voice meanwhile
+    if (gen !== micGen || !voice.active) { stream.getTracks().forEach((t) => t.stop()); return; } // superseded / left voice
     voice.stream = stream;
     const track = stream.getAudioTracks()[0];
     track.enabled = !voice.muted;
@@ -1241,6 +1328,7 @@
   }
 
   function teardownVoice() {
+    micGen++;
     [...voice.peers.keys()].forEach(closePeer);
     resetRelay();
     voice.stream?.getTracks().forEach((t) => t.stop());
@@ -1280,7 +1368,7 @@
 
   function makePeer(id, initiator) {
     const pc = new RTCPeerConnection({ iceServers: session.iceServers, bundlePolicy: 'max-bundle' });
-    const peer = { pc, initiator, chain: Promise.resolve(), audio: null, retries: 0 };
+    const peer = { pc, chain: Promise.resolve(), audio: null };
     voice.peers.set(id, peer);
     voice.stream.getTracks().forEach((t) => pc.addTrack(t, voice.stream));
     pc.onicecandidate = (e) => { if (e.candidate) socket.emit('signal', { to: id, data: { candidate: e.candidate } }); };
@@ -1305,7 +1393,6 @@
       if (st === 'connected') {
         clearTimeout(peer.timer);
         clearTimeout(peer.dcTimer);
-        peer.retries = 0;
         // Find out whether the call goes phone-to-phone or through a TURN relay (shown in People).
         pc.getStats().then((stats) => {
           let pair = null;
@@ -1478,9 +1565,12 @@
     };
     try {
       if (!ctx.audioWorklet) throw new Error('no worklet');
-      const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: 'application/javascript' }));
-      await ctx.audioWorklet.addModule(url);
-      URL.revokeObjectURL(url);
+      if (!ctx.mnWorklet) {
+        const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: 'application/javascript' }));
+        ctx.mnWorklet = ctx.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+        ctx.mnWorklet.catch(() => { ctx.mnWorklet = null; });
+      }
+      await ctx.mnWorklet;
       if (relay.capture !== cap) return; // voice was left meanwhile
       cap.node = new AudioWorkletNode(ctx, 'mn-capture');
       cap.node.port.onmessage = (e) => onSamples(e.data);
@@ -1488,6 +1578,7 @@
       cap.node = ctx.createScriptProcessor(2048, 1, 1); // older browsers
       cap.node.onaudioprocess = (e) => onSamples(e.inputBuffer.getChannelData(0));
     }
+    if (relay.capture !== cap) return;
     cap.src.connect(cap.node);
     cap.node.connect(cap.mute);
   }

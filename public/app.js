@@ -37,7 +37,7 @@
     fsBtn: $('#fsBtn'), menu: $('#menu'), toast: $('#toast'), subs: $('#subs'),
     panel: $('#panel'), panelClose: $('#panelClose'), chatBadge: $('#chatBadge'), peopleCount: $('#peopleCount'),
     messages: $('#messages'), typing: $('#typing'), people: $('#people'), movies: $('#movies'), moviesCount: $('#moviesCount'),
-    refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), sendBtn: $('#sendBtn'), kbFloat: $('#kbFloat'), quickReacts: $('#quickReacts'),
+    refreshMovies: $('#refreshMovies'), composer: $('#composer'), msgInput: $('#msgInput'), sendBtn: $('#sendBtn'), kbFloat: $('#kbFloat'), kbReacts: $('#kbReacts'), quickReacts: $('#quickReacts'),
     modal: $('#modal'), modalTitle: $('#modalTitle'), modalText: $('#modalText'), modalOk: $('#modalOk'), modalCancel: $('#modalCancel'),
     audioSink: $('#audioSink'),
   };
@@ -823,20 +823,25 @@
       b.type = 'button';
       b.textContent = e;
       b.onclick = () => { socket?.emit('react', { emoji: e }); if (host === el.reactStrip) showControls(); };
+      // Don't steal focus from the message box — otherwise tapping an emoji closes the keyboard.
+      b.addEventListener('pointerdown', (ev) => ev.preventDefault());
       host.appendChild(b);
     }
   });
   el.reactBtn.addEventListener('click', () => { el.reactStrip.hidden = !el.reactStrip.hidden; el.reactBtn.classList.toggle('on', !el.reactStrip.hidden); showControls(); });
 
   function floatEmoji({ emoji, name, color }) {
+    // Keyboard open → the bottom of the video is covered by the raised message box,
+    // so reactions rise from just above the emoji row instead.
+    const host = el.app.classList.contains('kb-up') ? el.kbReacts : el.reactions;
     const d = document.createElement('div');
     d.className = 'float-emoji';
     d.style.left = `${8 + Math.random() * 80}%`;
     d.style.setProperty('--dx', `${(Math.random() - 0.5) * 80}px`);
     d.innerHTML = `<span class="e">${esc(emoji)}</span><span class="n" style="color:${esc(color)}">${esc(name)}</span>`;
-    el.reactions.appendChild(d);
+    host.appendChild(d);
     setTimeout(() => d.remove(), 2900);
-    if (el.reactions.children.length > 24) el.reactions.firstElementChild.remove();
+    if (host.children.length > 24) host.firstElementChild.remove();
   }
 
   let toastTimer = null;

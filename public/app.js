@@ -24,7 +24,7 @@
 
   const el = {
     join: $('#join'), joinForm: $('#joinForm'), nameInput: $('#nameInput'), codeInput: $('#codeInput'), codeField: $('#codeField'),
-    joinBtn: $('#joinBtn'), joinErr: $('#joinErr'),
+    joinBtn: $('#joinBtn'), joinErr: $('#joinErr'), codeNote: $('#codeNote'),
     app: $('#app'), nowTitle: $('#nowTitle'), net: $('#net'), netText: $('#netText'),
     voiceJoin: $('#voiceJoin'), voiceOn: $('#voiceOn'), micBtn: $('#micBtn'), voiceLeave: $('#voiceLeave'),
     player: $('#player'), video: $('#video'), controls: $('#controls'), reactions: $('#reactions'), ticker: $('#ticker'),
@@ -53,7 +53,7 @@
   }
 
   // ---------- App state ----------
-  let session = null, socket = null, me = null, myName = '';
+  let session = null, socket = null, me = null, myName = '', linkHadCode = false;
   let users = [], movies = [], state = null, current = null, hls = null, sourceKind = null;
   let clockOffset = 0, bestRtt = Infinity, latency = 0;
   let waitMode = false, waitingNames = [];
@@ -74,8 +74,13 @@
   async function boot() {
     const params = new URLSearchParams(location.search);
     if (params.get('code')) {
+      // Shared link has the passcode built in: fill it, hide the field, just ask for a name.
       el.codeInput.value = params.get('code');
-      history.replaceState(null, '', location.pathname);
+      linkHadCode = true;
+      hideCodeField();
+      el.joinErr.textContent = '';
+      el.codeNote.hidden = false;
+      history.replaceState(null, '', location.pathname); // keep the passcode out of the address bar/history
     }
     el.nameInput.value = store.get('name', '');
     try {
@@ -112,6 +117,16 @@
           body: JSON.stringify({ code: el.codeInput.value.trim() }),
         });
         const data = await r.json().catch(() => ({}));
+        if (r.status === 401 && linkHadCode) {
+          // Old link (server restarted with a new passcode): show the field so they can type it.
+          linkHadCode = false;
+          el.codeNote.hidden = true;
+          el.codeField.hidden = false;
+          el.codeInput.required = true;
+          el.codeInput.value = '';
+          el.codeInput.focus();
+          throw new Error('This link has an old passcode — ask for the new link, or type the passcode.');
+        }
         if (!r.ok) throw new Error(data.error || 'Could not join');
         session = data;
       }

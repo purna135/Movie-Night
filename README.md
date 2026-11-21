@@ -84,18 +84,21 @@ before it finishes — everyone switches to the optimized version automatically 
 npm start
 ```
 
-…or double-click **`Start Movie Night.cmd`**. The terminal prints a **link, passcode and QR code**:
+…or double-click **`Start Movie Night.cmd`**. The terminal prints **one share link** (passcode built in) and a QR code:
 
 ```
-┌────────────────────────────────────────────────────────────┐
-  🎬  Movie Night is live — send this to your friend
-  Link:      https://something-random.trycloudflare.com
-  Passcode:  482913
+┌────────────────────────────────────────────────────────────────┐
+  🎬  Movie Night is live — send this ONE link to your friend:
+
+  👉  https://something-random.trycloudflare.com/?code=482913
+
+  (Passcode 482913 is already inside the link — they just enter their name.)
   Movies:    1 in D:\Movie-Night\movies
-└────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────┘
 ```
 
-Send both to your friends. Keep the terminal open while you watch; `Ctrl+C` stops everything.
+Send that link — friends only type their name. Keep the terminal open while you watch; `Ctrl+C` stops
+everything. Each restart makes a new link; an old link shows a clear message and lets them type the passcode.
 
 ## Features
 

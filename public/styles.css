@@ -577,3 +577,7 @@ video::cue { background: rgba(0,0,0,.6); color: #fff; font-family: var(--font); 
 }
 .app.kb-up .kb-reacts { display: block; }
 .kb-reacts .float-emoji { bottom: 0; }
+
+/* Join screen: passcode came from the shared link */
+.code-note { display: flex; align-items: center; gap: 8px; margin: -2px 0 12px 4px; color: #8ff0c4; font-size: 13px; font-weight: 600; }
+.code-note svg { width: 16px; height: 16px; padding: 2px; border-radius: 50%; background: rgba(61,220,151,.18); color: var(--ok); }

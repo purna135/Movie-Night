@@ -339,18 +339,21 @@ function findCloudflared() {
 
 function banner(url) {
   const list = movies();
-  const line = '─'.repeat(60);
+  const share = `${url}/?code=${PASSCODE}`; // one link: opening it fills in the passcode automatically
+  const line = '─'.repeat(64);
   console.log(`\n┌${line}┐`);
-  console.log('  🎬  Movie Night is live — send this to your friend');
-  console.log(`  Link:      ${url}`);
-  console.log(`  Passcode:  ${PASSCODE}`);
+  console.log('  🎬  Movie Night is live — send this ONE link to your friend:');
+  console.log('');
+  console.log(`  👉  ${share}`);
+  console.log('');
+  console.log(`  (Passcode ${PASSCODE} is already inside the link — they just enter their name.)`);
   console.log(`  Movies:    ${list.length} in ${MOVIES_DIR}`);
   const slow = list.filter((m) => !m.hls);
   if (slow.length) console.log(`  Tip:       ${slow.length} not optimized for slow networks — run: npm run optimize`);
   console.log(`└${line}┘\n`);
   try {
-    require('qrcode-terminal').generate(`${url}/?code=${PASSCODE}`, { small: true });
-    console.log('  Scan with a phone camera to join (passcode included)\n');
+    require('qrcode-terminal').generate(share, { small: true });
+    console.log('  …or scan this with a phone camera (same link)\n');
   } catch {}
 }
 

@@ -130,6 +130,11 @@ function run(argv, duration, label) {
     const started = Date.now();
     let err = '';
     p.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
+    // Progress: redraw one line in a real terminal (at most once a second, trimmed to the window width
+    // so it never wraps — a wrapped line can't be redrawn and turns into a wall of lines). When output
+    // isn't a terminal (piped/logged), print a short line every 5% instead.
+    const tty = process.stdout.isTTY;
+    let lastDraw = 0, lastStep = -1, lastLine = '';
     p.stdout.on('data', (d) => {
       const m = String(d).match(/out_time_(?:us|ms)=(\d+)/g);
       if (!m || !duration) return;
@@ -138,12 +143,25 @@ function run(argv, duration, label) {
       const elapsed = (Date.now() - started) / 1000;
       const eta = pct > 0.5 ? (elapsed / pct) * (100 - pct) : 0;
       const speed = elapsed > 1 ? `${(t / elapsed).toFixed(1)}x` : '';
-      const bar = '█'.repeat(Math.round(pct / 4)).padEnd(25, '░');
-      process.stdout.write(`\r  ${label} ${bar} ${pct.toFixed(1).padStart(5)}%  ${speed.padStart(6)}  ETA ${fmt(eta)}   `);
+      if (tty) {
+        if (Date.now() - lastDraw < 1000) return;
+        lastDraw = Date.now();
+        const cols = process.stdout.columns || 80;
+        const info = `${pct.toFixed(1).padStart(5)}%  ${speed}  ETA ${fmt(eta)}`;
+        const barW = Math.max(0, Math.min(25, cols - info.length - label.length - 8));
+        const bar = barW >= 8 ? `${'█'.repeat(Math.round((pct / 100) * barW)).padEnd(barW, '░')} ` : '';
+        lastLine = `  ${label} ${bar}${info}`.slice(0, cols - 1);
+        process.stdout.write(`\r\x1b[2K${lastLine}`);
+      } else {
+        const step = Math.floor(pct / 5);
+        if (step === lastStep) return;
+        lastStep = step;
+        console.log(`  ${label} ${pct.toFixed(0)}%  ${speed}  ETA ${fmt(eta)}`);
+      }
     });
     p.on('close', (code) => {
       child = null;
-      process.stdout.write('\n');
+      if (tty && lastLine) process.stdout.write('\n');
       code === 0 ? resolve() : reject(new Error(err));
     });
   });

@@ -531,6 +531,12 @@ video::cue { background: rgba(0,0,0,.6); color: #fff; font-family: var(--font); 
   transform: translateY(calc(-1 * var(--kb, 0px)));
   transition: transform .14s ease-out;
 }
-.app.kb-up .composer { box-shadow: 0 -12px 28px rgba(0,0,0,.55); padding-bottom: 10px; }
+/* --kb-gap: extra lift so the whole box clears the keyboard's suggestion bar with a little breathing room */
+.app.kb-up { --kb-gap: 18px; }
+.app.kb-up .composer {
+  transform: translateY(calc(-1 * (var(--kb, 0px) + var(--kb-gap))));
+  /* second shadow paints the gap below the box in the same colour, so it reads as one solid bar */
+  box-shadow: 0 -12px 28px rgba(0,0,0,.55), 0 var(--kb-gap) 0 0 var(--bg-2); padding-bottom: 10px;
+}
 /* Leave room so the newest messages can still be scrolled into view above the lifted box */
-.app.kb-up .messages { padding-bottom: calc(6px + var(--kb, 0px)); }
+.app.kb-up .messages { padding-bottom: calc(6px + var(--kb, 0px) + var(--kb-gap)); }

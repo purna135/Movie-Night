@@ -1293,8 +1293,15 @@
     // (height shrank while typing on a phone = keyboard: keep the full height so nothing reflows)
     document.documentElement.style.setProperty('--app-h', `${fullH}px`);
 
-    const visibleBottom = vv ? vv.offsetTop + vv.height : h;
-    let kb = isTouch ? Math.round(fullH - visibleBottom) : 0;
+    // When the keyboard opens, Chrome/Safari also *scroll the page up* (visualViewport.offsetTop) to
+    // reveal the focused box, which pushed the top bar + video off screen. Shift the app back down by
+    // that amount so its top stays at the top of what you see, then lift the message box by the full
+    // keyboard height (= layout height − visible height).
+    // Only while typing on a touch device and not pinch-zoomed, so zooming never moves things.
+    const active = isTouch && typing && vv && Math.abs((vv.scale || 1) - 1) < 0.01;
+    const offsetTop = active ? Math.max(0, Math.round(vv.offsetTop)) : 0;
+    el.app.style.transform = offsetTop ? `translateY(${offsetTop}px)` : '';
+    let kb = active ? Math.round(fullH - vv.height) : 0;
     if (kb < 80) kb = 0; // ignore browser-toolbar wiggle
     document.documentElement.style.setProperty('--kb', `${kb}px`);
     el.app.classList.toggle('kb-up', kb > 0);

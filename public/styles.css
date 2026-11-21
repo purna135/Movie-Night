@@ -172,7 +172,6 @@ svg { width: 22px; height: 22px; flex: none; }
 .icon-btn.mic.muted { background: rgba(255,84,112,.16); color: var(--bad); }
 .icon-btn.mic.speaking { box-shadow: 0 0 0 2px var(--ok); }
 .icon-btn.leave { color: var(--bad); }
-.icon-btn.glass.leave { color: #ff8a9c; }
 .icon-btn.leave:hover { background: rgba(255,84,112,.16); }
 
 .layout { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
@@ -221,6 +220,7 @@ video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: con
 .seek input::-moz-range-track { height: 26px; background: transparent; }
 .seek input::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; margin-top: 5.5px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px rgba(255,138,61,.35), 0 2px 6px rgba(0,0,0,.4); }
 .seek input::-moz-range-thumb { width: 15px; height: 15px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px rgba(255,138,61,.35); }
+#seek { touch-action: none; } /* a sideways drag moves the slider, never scrolls or swipes the page */
 .seek-tip { position: absolute; bottom: 28px; transform: translateX(-50%); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,.8); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; pointer-events: none; }
 
 .vol { display: flex; align-items: center; }

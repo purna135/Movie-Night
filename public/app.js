@@ -29,7 +29,7 @@
     voiceJoin: $('#voiceJoin'), voiceOn: $('#voiceOn'), micBtn: $('#micBtn'), voiceLeave: $('#voiceLeave'),
     player: $('#player'), video: $('#video'), reactions: $('#reactions'), ticker: $('#ticker'),
     centerMsg: $('#centerMsg'), centerText: $('#centerText'), tapSync: $('#tapSync'), empty: $('#emptyState'),
-    cTitle: $('#cTitle'), cMic: $('#cMic'), cVoiceJoin: $('#cVoiceJoin'), cVoiceLeave: $('#cVoiceLeave'), cChat: $('#cChat'), cChatBadge: $('#cChatBadge'),
+    cTitle: $('#cTitle'), cMic: $('#cMic'), cVoiceJoin: $('#cVoiceJoin'), cChat: $('#cChat'), cChatBadge: $('#cChatBadge'),
     playBtn: $('#playBtn'), back10: $('#back10'), fwd10: $('#fwd10'),
     seekWrap: $('#seekWrap'), seek: $('#seek'), seekFill: $('#seekFill'), seekBuf: $('#seekBuf'), seekTip: $('#seekTip'),
     curTime: $('#curTime'), durTime: $('#durTime'), muteBtn: $('#muteBtn'), volume: $('#volume'),
@@ -775,14 +775,21 @@
     el.seekTip.style.left = `${d ? (v / d) * 100 : 0}%`;
   }
   el.seek.addEventListener('input', () => { dragging = true; el.seekWrap.classList.add('drag'); seekPreview(); showControls(); });
-  const endDrag = () => { dragging = false; el.seekWrap.classList.remove('drag'); el.seekTip.hidden = true; updateTime(); };
-  el.seek.addEventListener('change', () => {
-    endDrag();
+  // Letting go of the slider jumps there — on 'change', or on release if 'change' doesn't come
+  // (some phones skip it when the drag is cancelled). Read the dropped position *before* anything
+  // redraws the slider from the video's current time.
+  function finishDrag() {
+    if (!dragging) return;
     const t = Number(el.seek.value);
-    if (current) { sendControl('seek', t); seekTo(t); }
-  });
-  for (const ev of ['pointerup', 'pointercancel', 'touchcancel']) {
-    el.seek.addEventListener(ev, () => setTimeout(() => { if (dragging) endDrag(); }, 60));
+    dragging = false;
+    el.seekWrap.classList.remove('drag');
+    el.seekTip.hidden = true;
+    if (current && Math.abs(t - video.currentTime) > 0.25) { sendControl('seek', t); seekTo(t); }
+    updateTime();
+  }
+  el.seek.addEventListener('change', finishDrag);
+  for (const ev of ['pointerup', 'pointercancel', 'touchend', 'touchcancel']) {
+    el.seek.addEventListener(ev, () => setTimeout(finishDrag, 0));
   }
   el.seekWrap.addEventListener('pointermove', (e) => {
     if (isTouch || dragging || !duration()) return;
@@ -1249,9 +1256,8 @@
     el.voiceJoin.disabled = el.cVoiceJoin.disabled = true;
     ensureAudio(); // still inside the tap, so the audio engine is allowed to start
     let stream;
-    const askedEarphones = earphones();
     try {
-      stream = await navigator.mediaDevices.getUserMedia(micConstraints());
+      stream = await navigator.mediaDevices.getUserMedia(micConstraints(true)); // always a call mic first (askCall)
     } catch (err) {
       const msg = {
         NotAllowedError: '🎙  Microphone permission is blocked — allow it in the browser’s site settings',
@@ -1276,11 +1282,11 @@
     addMeter('me', voice.stream);
     socket.emit('voice-join');
     renderVoice();
-    // Earphones mode: phones only reliably drop "call audio" when the mic is re-opened after the call
-    // is already running (that's why flipping the switch mid-call worked but joining with it on
-    // didn't). So do that re-open automatically once the call has started.
-    // (Also re-open if the switch was flipped while the permission prompt was up.)
-    if (earphones() || askedEarphones !== earphones()) setTimeout(() => { if (voice.active) swapMic(); }, 2500);
+    // Earphones mode: the path that reliably gives full movie sound on phones is "join with a normal
+    // (call) mic, then switch to the earphones mic once the call is running" — exactly what flipping
+    // the switch on mid-call does. Joining straight into earphones mode, especially a rejoin, could
+    // leave the phone stuck in call audio. So every join opens a call mic (above) and switches here.
+    if (earphones()) setTimeout(() => { if (voice.active && earphones()) swapMic(); }, 1500);
     if (isTouch && !earphones() && !store.get('earHint', false)) {
       store.set('earHint', true);
       toast('🎧  In voice. Wearing earphones? Turn on Earphones mode in People for full movie sound');
@@ -1295,15 +1301,20 @@
   // only needed when the movie plays from a speaker (so it doesn't leak into the mic) — with
   // earphones it can be off, and the movie keeps its normal sound.
   const earphones = () => store.get('earphones', false) === true;
-  function micConstraints() {
-    const call = !earphones();
+  function micConstraints(call = !earphones()) {
     return { audio: { echoCancellation: call, noiseSuppression: call, autoGainControl: call, channelCount: 1 } };
   }
   el.earMode.checked = earphones();
-  el.earMode.addEventListener('change', async () => {
+  el.earMode.addEventListener('change', () => {
     store.set('earphones', el.earMode.checked);
-    if (voice.active) await swapMic();
+    // Feedback right away — re-opening the mic takes the phone a moment.
     toast(el.earMode.checked ? '🎧  Earphones mode on — full movie sound' : '🔈  Earphones mode off — echo cancelling on');
+    if (voice.active) {
+      el.micState.hidden = false;
+      el.micState.classList.remove('on');
+      el.micState.textContent = 'Switching the mic…';
+      swapMic();
+    }
   });
 
   // Re-open the mic with the new settings and hand the new track to every friend's connection.
@@ -1338,7 +1349,8 @@
     const ec = t && t.readyState === 'live' ? t.getSettings?.().echoCancellation : undefined;
     el.micState.hidden = ec === undefined;
     if (ec !== undefined) {
-      el.micState.textContent = ec ? 'Mic now: call mode (echo cancelling on)' : 'Mic now: earphones mode ✓ (echo cancelling off)';
+      el.micState.textContent = !ec ? 'Mic now: earphones mode ✓ (echo cancelling off)'
+        : earphones() ? 'Switching to earphones mode…' : 'Mic now: call mode (echo cancelling on)';
       el.micState.classList.toggle('on', !ec);
     }
   }
@@ -1387,9 +1399,7 @@
     el.voiceJoin.hidden = voice.active;
     el.voiceOn.hidden = !voice.active;
     el.cMic.hidden = !voice.active;
-    // Full screen hides the top bar, so the player's own corner gets join / leave too.
-    el.cVoiceJoin.hidden = voice.active;
-    el.cVoiceLeave.hidden = !voice.active;
+    el.cVoiceJoin.hidden = voice.active; // full screen hides the top bar, so join from the player's corner
     for (const b of [el.micBtn, el.cMic]) {
       b.classList.toggle('muted', voice.muted);
       b.classList.toggle('mic', true);
@@ -1402,7 +1412,6 @@
   el.micBtn.addEventListener('click', toggleMic);
   el.cMic.addEventListener('click', toggleMic);
   el.cVoiceJoin.addEventListener('click', () => { showControls(); joinVoice(); });
-  el.cVoiceLeave.addEventListener('click', () => { showControls(); leaveVoice(); });
 
   function makePeer(id, initiator) {
     const pc = new RTCPeerConnection({ iceServers: session.iceServers, bundlePolicy: 'max-bundle' });

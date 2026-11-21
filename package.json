@@ -1,0 +1,19 @@
+{
+  "name": "movie-night",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Watch a movie from your PC together, in sync, with chat and voice.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js --tunnel",
+    "local": "node server.js",
+    "optimize": "node optimize.js"
+  },
+  "dependencies": {
+    "compression": "^1.8.2",
+    "express": "^4.21.2",
+    "hls.js": "^1.7.4",
+    "qrcode-terminal": "^0.12.0",
+    "socket.io": "^4.8.1"
+  }
+}

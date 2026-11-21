@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#09090d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Movie Night</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍿</text></svg>">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5.14v13.72a1 1 0 0 0 1.5.86l11.04-6.86a1 1 0 0 0 0-1.72L9.5 4.28A1 1 0 0 0 8 5.14z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect fill="currentColor" x="6" y="4.5" width="4.2" height="15" rx="1.3"/><rect fill="currentColor" x="13.8" y="4.5" width="4.2" height="15" rx="1.3"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 3v5h5"/><text x="12" y="15.5" font-size="7.5" font-weight="700" text-anchor="middle" fill="currentColor" font-family="system-ui">10</text></symbol>
+    <symbol id="i-fwd" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 3v5h-5"/><text x="12" y="15.5" font-size="7.5" font-weight="700" text-anchor="middle" fill="currentColor" font-family="system-ui">10</text></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+    <symbol id="i-shrink" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></symbol>
+    <symbol id="i-cc" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10.5 10.2a2.4 2.4 0 1 0 0 3.6M17 10.2a2.4 2.4 0 1 0 0 3.6"/></symbol>
+    <symbol id="i-hd" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.6A8.4 8.4 0 1 1 21 11.5z"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3" fill="currentColor"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 3l18 18M9 9v2a3 3 0 0 0 5.1 2.1M15 9.3V5.5a3 3 0 0 0-5.9-.7M5 11a7 7 0 0 0 11.2 5.6M19 11a7 7 0 0 1-.6 2.9M12 18v3.5"/></symbol>
+    <symbol id="i-headset" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 14v-2a9 9 0 0 1 18 0v2"/><rect x="2.5" y="13" width="5" height="7.5" rx="2" fill="currentColor"/><rect x="16.5" y="13" width="5" height="7.5" rx="2" fill="currentColor"/></symbol>
+    <symbol id="i-leave" viewBox="0 0 24 24"><path fill="currentColor" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-.56.9 11.5 11.5 0 0 0-2.66 1.85 1 1 0 0 1-1.4-.02L.29 13.07a1 1 0 0 1 0-1.41C3.34 8.77 7.46 7 12 7s8.66 1.77 11.71 4.66a1 1 0 0 1 0 1.41l-2.48 2.48a1 1 0 0 1-1.4.02 11.3 11.3 0 0 0-2.67-1.85 1 1 0 0 1-.56-.9v-3.1A15 15 0 0 0 12 9z"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path fill="currentColor" d="M3.4 20.4 21.3 12.9a1 1 0 0 0 0-1.8L3.4 3.6a1 1 0 0 0-1.38 1.2L4.4 12l-2.38 7.2a1 1 0 0 0 1.38 1.2zM4.6 12h7.9"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M16 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20"/><circle cx="9" cy="7.5" r="3.6" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M22 20v-1.5a4 4 0 0 0-3-3.9M15.5 4a3.6 3.6 0 0 1 0 7"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" d="M7 3v18M17 3v18M3 8h4M17 8h4M3 16h4M17 16h4M3 12h18"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 0 1-15.5 6.2L3 16M3 12A9 9 0 0 1 18.5 5.8L21 8M21 3v5h-5M3 21v-5h5"/></symbol>
+    <symbol id="i-vol" viewBox="0 0 24 24"><path fill="currentColor" d="M11 5 6 9H3v6h3l5 4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></symbol>
+    <symbol id="i-vol-off" viewBox="0 0 24 24"><path fill="currentColor" d="M11 5 6 9H3v6h3l5 4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m16 9 6 6M22 9l-6 6"/></symbol>
+    <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8 14.5s1.5 2 4 2 4-2 4-2"/><circle cx="9" cy="9.5" r="1.3" fill="currentColor"/><circle cx="15" cy="9.5" r="1.3" fill="currentColor"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path fill="currentColor" d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+  </svg>
+
+  <!-- ============ JOIN ============ -->
+  <section id="join" class="join">
+    <div class="join-bg" aria-hidden="true"><div class="glow g1"></div><div class="glow g2"></div><div class="glow g3"></div></div>
+    <form id="joinForm" class="join-card" autocomplete="on">
+      <div class="brand big"><span class="logo">🍿</span><span>Movie Night</span></div>
+      <p class="tagline">Same movie, same second — wherever you are.</p>
+      <label class="field">
+        <span>Your name</span>
+        <input id="nameInput" maxlength="24" autocomplete="nickname" placeholder="e.g. Sam" required>
+      </label>
+      <label class="field" id="codeField">
+        <span>Room passcode</span>
+        <input id="codeInput" inputmode="numeric" maxlength="12" autocomplete="one-time-code" placeholder="6-digit code" required>
+      </label>
+      <button class="btn primary big" type="submit" id="joinBtn"><span>Join the room</span></button>
+      <p class="join-err" id="joinErr" role="alert"></p>
+      <ul class="join-perks">
+        <li><svg><use href="#i-bolt"/></svg>Adjusts quality to your connection</li>
+        <li><svg><use href="#i-headset"/></svg>Voice chat works best with earphones</li>
+      </ul>
+    </form>
+  </section>
+
+  <!-- ============ APP ============ -->
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="brand"><span class="logo">🍿</span><span class="brand-name">Movie Night</span></div>
+      <div class="now" id="nowTitle"></div>
+      <div class="top-right">
+        <div class="net" id="net" title="Connection"><i></i><span id="netText">Live</span></div>
+        <div class="voice" id="voiceBox">
+          <button class="btn voice-join" id="voiceJoin" type="button"><svg><use href="#i-headset"/></svg><span>Join voice</span></button>
+          <div class="voice-on" id="voiceOn" hidden>
+            <button class="icon-btn mic" id="micBtn" type="button" title="Mute (M)"><svg><use href="#i-mic"/></svg></button>
+            <button class="icon-btn leave" id="voiceLeave" type="button" title="Leave voice"><svg><use href="#i-leave"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout" id="layout">
+      <section class="stage" id="stage">
+        <div class="player" id="player">
+          <video id="video" playsinline webkit-playsinline preload="auto"></video>
+          <div class="reactions" id="reactions"></div>
+          <div class="subs" id="subs" hidden></div>
+          <div class="ticker" id="ticker"></div>
+          <div class="center-msg" id="centerMsg" hidden><div class="spinner"></div><span id="centerText">Loading…</span></div>
+          <button class="tap-sync" id="tapSync" type="button" hidden><svg><use href="#i-play"/></svg><span>Tap to join playback</span></button>
+          <div class="empty" id="emptyState" hidden>
+            <div class="empty-icon">🎬</div>
+            <h2>No movie selected</h2>
+            <p>Pick one from the <b>Movies</b> tab.</p>
+          </div>
+
+          <div class="controls" id="controls">
+            <div class="c-top">
+              <div class="c-title" id="cTitle"></div>
+              <div class="c-top-actions">
+                <button class="icon-btn glass imm-only" id="cMic" type="button" hidden title="Mute"><svg><use href="#i-mic"/></svg></button>
+                <button class="icon-btn glass imm-only" id="cChat" type="button" title="Chat (C)"><svg><use href="#i-chat"/></svg><b class="dot" id="cChatBadge" hidden></b></button>
+              </div>
+            </div>
+            <div class="c-mid">
+              <button class="icon-btn round" id="back10" type="button" title="Back 10s (←)"><svg><use href="#i-back"/></svg></button>
+              <button class="icon-btn round play" id="playBtn" type="button" title="Play / pause (Space)"><svg><use href="#i-play"/></svg></button>
+              <button class="icon-btn round" id="fwd10" type="button" title="Forward 10s (→)"><svg><use href="#i-fwd"/></svg></button>
+            </div>
+            <div class="c-bottom">
+              <div class="react-strip" id="reactStrip" hidden></div>
+              <div class="seek" id="seekWrap">
+                <div class="seek-track"><div class="seek-buf" id="seekBuf"></div><div class="seek-fill" id="seekFill"></div></div>
+                <input type="range" id="seek" min="0" max="100" step="0.1" value="0" aria-label="Seek">
+                <div class="seek-tip" id="seekTip" hidden>0:00</div>
+              </div>
+              <div class="c-row">
+                <span class="time"><span id="curTime">0:00</span><i>/</i><span id="durTime">0:00</span></span>
+                <span class="spacer"></span>
+                <div class="vol desk-only">
+                  <button class="icon-btn" id="muteBtn" type="button" title="Mute movie"><svg><use href="#i-vol"/></svg></button>
+                  <input type="range" id="volume" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+                </div>
+                <button class="icon-btn" id="reactBtn" type="button" title="React"><svg><use href="#i-smile"/></svg></button>
+                <button class="icon-btn" id="ccBtn" type="button" title="Subtitles"><svg><use href="#i-cc"/></svg></button>
+                <button class="chip-btn" id="qualityBtn" type="button" title="Quality"><span id="qualityLabel">Auto</span></button>
+                <button class="icon-btn" id="fsBtn" type="button" title="Fullscreen (F)"><svg><use href="#i-expand"/></svg></button>
+              </div>
+            </div>
+          </div>
+          <div class="menu" id="menu" hidden></div>
+          <div class="toast" id="toast" hidden></div>
+        </div>
+      </section>
+
+      <aside class="panel" id="panel">
+        <div class="panel-head">
+          <nav class="tabs" role="tablist">
+            <button class="tab active" data-tab="chat" type="button"><svg><use href="#i-chat"/></svg><span>Chat</span><b class="badge" id="chatBadge" hidden></b></button>
+            <button class="tab" data-tab="people" type="button"><svg><use href="#i-users"/></svg><span>People</span><b class="count" id="peopleCount">1</b></button>
+            <button class="tab" data-tab="movies" type="button"><svg><use href="#i-film"/></svg><span>Movies</span></button>
+          </nav>
+          <button class="icon-btn panel-close imm-only" id="panelClose" type="button" title="Close"><svg><use href="#i-close"/></svg></button>
+        </div>
+
+        <div class="tab-body active" data-body="chat">
+          <div class="messages" id="messages"></div>
+          <div class="typing" id="typing" hidden></div>
+        </div>
+        <div class="tab-body" data-body="people">
+          <ul class="people" id="people"></ul>
+          <div class="voice-tip">
+            <svg><use href="#i-headset"/></svg>
+            <p>Wear earphones in voice chat so the movie doesn't echo back to your friends.</p>
+          </div>
+        </div>
+        <div class="tab-body" data-body="movies">
+          <div class="movies-head">
+            <span id="moviesCount">Library</span>
+            <button class="icon-btn" id="refreshMovies" type="button" title="Refresh"><svg><use href="#i-refresh"/></svg></button>
+          </div>
+          <ul class="movies" id="movies"></ul>
+        </div>
+
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="quick-reacts" id="quickReacts"></div>
+          <div class="compose-row">
+            <input id="msgInput" maxlength="600" placeholder="Say something…" enterkeyhint="send" autocomplete="off">
+            <button class="send" type="submit" id="sendBtn" title="Send"><svg><use href="#i-send"/></svg></button>
+          </div>
+        </form>
+      </aside>
+    </main>
+  </div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-card">
+      <h3 id="modalTitle"></h3>
+      <p id="modalText"></p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="modalCancel" type="button">Cancel</button>
+        <button class="btn primary" id="modalOk" type="button">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="audioSink" hidden></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/vendor/hls.min.js" defer></script>
+  <script src="/app.js" defer></script>
+</body>
+</html>

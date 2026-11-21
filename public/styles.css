@@ -141,16 +141,10 @@ svg { width: 22px; height: 22px; flex: none; }
   position: fixed; top: 0; left: 0; right: 0;
   display: flex; flex-direction: column;
   height: 100dvh;                 /* fallback */
-  height: var(--app-h, 100dvh);   /* visible area above the on-screen keyboard (set in app.js) */
+  height: var(--app-h, 100dvh);   /* full layout height; does NOT shrink for the keyboard (app.js) */
   padding-left: var(--safe-l); padding-right: var(--safe-r);
-  will-change: transform;
 }
-/* Typing on a phone: give the chat the room — hide the top bar and emoji row */
-.app.kb-open .quick-reacts { display: none; }
-@media (max-width: 599px) {
-  .app.kb-open .topbar { display: none; }
-  .app.kb-open .composer { padding-bottom: 8px; }
-}
+
 .topbar {
   flex: none; display: flex; align-items: center; gap: 12px;
   height: calc(56px + var(--safe-t)); padding: var(--safe-t) 16px 0;
@@ -528,15 +522,15 @@ video::cue { background: rgba(0,0,0,.6); color: #fff; font-family: var(--font); 
 .menu.sheet button { padding: 14px 14px; font-size: 15.5px; }
 @keyframes sheetUp { from { transform: translateY(100%); } }
 
-/* Typing on an upright phone: the keyboard leaves ~350–400px, so shrink the video to a mini
-   player and hide the tabs + player controls until the keyboard closes. */
-@media (max-width: 599px) {
-  .app.kb-open:not(.immersive) .player {
-    aspect-ratio: auto;
-    height: clamp(110px, calc(var(--app-h, 100dvh) * 0.32), 240px);
-  }
-  .app.kb-open:not(.immersive) .controls,
-  .app.kb-open:not(.immersive) .panel-head,
-  .app.kb-open:not(.immersive) .ticker { display: none; }
-  .app.kb-open:not(.immersive) .messages { padding-top: 6px; }
+
+
+/* Keyboard open: only the message box + emoji row slide up and sit on top of the keyboard.
+   Everything else keeps its place; older messages simply stay behind the box. */
+.composer {
+  position: relative; z-index: 6;
+  transform: translateY(calc(-1 * var(--kb, 0px)));
+  transition: transform .14s ease-out;
 }
+.app.kb-up .composer { box-shadow: 0 -12px 28px rgba(0,0,0,.55); padding-bottom: 10px; }
+/* Leave room so the newest messages can still be scrolled into view above the lifted box */
+.app.kb-up .messages { padding-bottom: calc(6px + var(--kb, 0px)); }

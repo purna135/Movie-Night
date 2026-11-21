@@ -352,6 +352,13 @@
   video.addEventListener('ended', () => { if (state?.playing) sendControl('pause'); });
   video.addEventListener('error', () => {
     if (!current || !video.error) return;
+    // Picked "Original" but this phone can't decode the file (e.g. HEVC/10-bit/MKV) → back to adaptive.
+    if (sourceKind === 'direct' && current.hls) {
+      store.set('quality', 'auto');
+      toast('This device can’t play the original file — switched to Auto');
+      loadMovie(current);
+      return;
+    }
     const fixable = sourceKind === 'direct';
     el.centerMsg.hidden = false;
     el.centerMsg.querySelector('.spinner').hidden = true;
@@ -434,7 +441,8 @@
   function loadMovie(m) {
     ignoreUntil = Date.now() + 1500;
     unload();
-    if (m.hls && window.Hls && Hls.isSupported()) {
+    const original = store.get('quality', 'auto') === 'original'; // viewer picked "Original" in the quality menu
+    if (m.hls && !original && window.Hls && Hls.isSupported()) {
       sourceKind = 'hls';
       hls = new Hls({
         capLevelToPlayerSize: true,      // a phone never downloads more pixels than it can show
@@ -466,7 +474,7 @@
       });
       hls.loadSource(m.hls);
       hls.attachMedia(video);
-    } else if (m.hls && video.canPlayType('application/vnd.apple.mpegurl')) {
+    } else if (m.hls && !original && video.canPlayType('application/vnd.apple.mpegurl')) {
       sourceKind = 'native-hls'; // iPhone / Safari: built-in adaptive streaming
       video.src = m.hls;
     } else {
@@ -512,7 +520,7 @@
 
   function updateQualityLabel() {
     const t = qualityText();
-    el.qualityLabel.textContent = t === 'Original' ? 'SRC' : t || 'Auto';
+    el.qualityLabel.textContent = t || 'Auto';
     el.qualityBtn.hidden = !current;
   }
 
@@ -570,23 +578,38 @@
     };
     if (kind === 'quality') {
       m.insertAdjacentHTML('beforeend', '<h4>Quality</h4>');
-      if (sourceKind === 'hls' && hls) {
-        const auto = hls.autoLevelEnabled;
-        const cur = hls.levels[hls.currentLevel];
-        add('Auto', auto, () => { hls.currentLevel = -1; store.set('quality', 'auto'); updateQualityLabel(); }, auto && cur ? levelName(cur) : '');
-        hls.levels
-          .map((l, i) => ({ l, i }))
-          .sort((a, b) => b.l.bitrate - a.l.bitrate)
-          .forEach(({ l, i }) => add(levelName(l), !auto && hls.currentLevel === i, () => {
-            hls.currentLevel = i; store.set('quality', levelName(l)); updateQualityLabel();
-          }, `${(l.bitrate / 1e6).toFixed(1)} Mbps`));
-        m.insertAdjacentHTML('beforeend', '<small>Auto picks the best quality your connection can handle without buffering.</small>');
-      } else if (sourceKind === 'native-hls') {
-        add('Auto', true, () => {});
-        m.insertAdjacentHTML('beforeend', '<small>Quality adapts to your connection automatically on this device.</small>');
+      const origHint = `${current.ext.toUpperCase()} · ${fmtSize(current.size)}`;
+      const onDirect = sourceKind === 'direct';
+      // Switching between the adaptive stream and the original file reloads the source;
+      // applyState() then puts this viewer back at the room's position.
+      const useAdaptive = (pref) => { store.set('quality', pref); loadMovie(current); };
+      if (current.hls) {
+        if (sourceKind === 'hls' && hls) {
+          const auto = hls.autoLevelEnabled;
+          const cur = hls.levels[hls.currentLevel];
+          add('Auto', auto, () => { hls.currentLevel = -1; store.set('quality', 'auto'); updateQualityLabel(); }, auto && cur ? levelName(cur) : '');
+          hls.levels
+            .map((l, i) => ({ l, i }))
+            .sort((a, b) => b.l.bitrate - a.l.bitrate)
+            .forEach(({ l, i }) => add(levelName(l), !auto && hls.currentLevel === i, () => {
+              hls.currentLevel = i; store.set('quality', levelName(l)); updateQualityLabel();
+            }, `${(l.bitrate / 1e6).toFixed(1)} Mbps`));
+        } else if (sourceKind === 'native-hls') {
+          add('Auto', true, () => {});
+        } else {
+          add('Auto', false, () => useAdaptive('auto'));
+          (current.qualities || []).forEach((q) => add(q, false, () => useAdaptive(q)));
+        }
+        add('Original', onDirect, () => {
+          if (onDirect) return;
+          store.set('quality', 'original');
+          loadMovie(current);
+          toast('Playing the original file');
+        }, origHint);
+        m.insertAdjacentHTML('beforeend', '<small><b>Auto</b> adapts to your connection. <b>Original</b> is the untouched file — best picture, but needs a fast connection and not every phone can play every format.</small>');
       } else {
-        add('Original file', true, () => {});
-        m.insertAdjacentHTML('beforeend', '<small>Playing the raw file. For smooth playback on slow networks, run <code>npm run optimize</code> on the host PC.</small>');
+        add('Original', true, () => {}, origHint);
+        m.insertAdjacentHTML('beforeend', '<small>Only the original file is available. For smooth playback on slow networks, run <code>npm run optimize</code> on the host PC.</small>');
       }
     } else if (kind === 'subs') {
       m.insertAdjacentHTML('beforeend', '<h4>Subtitles</h4>');
@@ -890,9 +913,13 @@
   function addMessage(m, silent = false) {
     const near = chatBody.scrollHeight - chatBody.scrollTop - chatBody.clientHeight < 120;
     if (m.system) {
+      // Same person joining/leaving again → replace their previous presence line instead of stacking.
+      const prev = el.messages.lastElementChild;
+      if (m.presence && prev && prev.dataset.presence === m.presence) prev.remove();
       const d = document.createElement('div');
       d.className = 'sys';
       d.textContent = m.text;
+      if (m.presence) d.dataset.presence = m.presence;
       el.messages.appendChild(d);
       lastMsg = { uid: null, ts: 0 };
     } else {
@@ -1248,20 +1275,32 @@
   }
 
   // ---------- On-screen keyboard ----------
-  // Many mobile browsers (iOS Safari, Chrome 108+, Samsung Internet) draw the keyboard *over* the page
-  // instead of shrinking it, which hid the chat box. Size the app to the visible viewport instead.
+  // The layout never changes when the keyboard opens: video, tabs and chat stay put, and only the
+  // message box (with the emoji row) slides up to sit on top of the keyboard, covering older messages.
+  // The keyboard height is *measured* (full layout height − visible height), so it works whether the
+  // browser overlays the keyboard (iOS, Chrome 108+) or shrinks the page (older Android browsers), and
+  // it resets as soon as the keyboard hides — even if the box keeps focus (Android back button).
   const vv = window.visualViewport;
+  let fullW = window.innerWidth;
+  let fullH = window.innerHeight;
+  let lastKb = 0;
   function fitViewport() {
-    const h = Math.round(vv ? vv.height : window.innerHeight);
-    document.documentElement.style.setProperty('--app-h', `${h}px`);
-    const top = vv ? Math.max(0, Math.round(vv.offsetTop)) : 0;
-    el.app.style.transform = top ? `translateY(${top}px)` : '';
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const typing = document.activeElement === el.msgInput;
+    if (!isTouch || Math.abs(w - fullW) > 1) { fullW = w; fullH = h; } // desktop resize or phone rotated
+    else if (h > fullH || !typing) fullH = h;                           // toolbar hid/showed, not the keyboard
+    // (height shrank while typing on a phone = keyboard: keep the full height so nothing reflows)
+    document.documentElement.style.setProperty('--app-h', `${fullH}px`);
+
+    const visibleBottom = vv ? vv.offsetTop + vv.height : h;
+    let kb = isTouch ? Math.round(fullH - visibleBottom) : 0;
+    if (kb < 80) kb = 0; // ignore browser-toolbar wiggle
+    document.documentElement.style.setProperty('--kb', `${kb}px`);
+    el.app.classList.toggle('kb-up', kb > 0);
+    if (kb > 0 && lastKb === 0) scrollChat(true);
+    lastKb = kb;
     updateImmersive();
-    const typing = isTouch && document.activeElement === el.msgInput;
-    if (el.app.classList.contains('kb-open') !== typing) {
-      el.app.classList.toggle('kb-open', typing);
-      if (typing) scrollChat(true);
-    }
   }
   if (vv) {
     vv.addEventListener('resize', fitViewport);

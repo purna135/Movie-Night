@@ -123,8 +123,13 @@ function setRoom(patch, extra) {
   io.emit('state', snapshot(extra));
 }
 
-function system(text) {
-  const msg = { id: crypto.randomUUID(), system: true, text, ts: Date.now() };
+// presence = the person's name for "joined"/"left" lines. A phone that drops in and out
+// (app switching, calls, weak signal) would otherwise flood the chat, so a new presence line
+// for the same person replaces their previous one if nothing else was said in between.
+function system(text, presence = null) {
+  const msg = { id: crypto.randomUUID(), system: true, text, presence, ts: Date.now() };
+  const last = history[history.length - 1];
+  if (presence && last && last.presence === presence) history.pop();
   history.push(msg);
   if (history.length > 150) history.shift();
   io.emit('chat', msg);
@@ -174,7 +179,7 @@ io.on('connection', (socket) => {
     socket.emit('welcome', { me, movies: list, state: snapshot(), history });
     io.emit('users', publicUsers());
     const seen = recent.get(cid);
-    if (!seen || Date.now() - seen > 60_000) system(`${user.name} joined`);
+    if (!seen || Date.now() - seen > 60_000) system(`${user.name} joined`, user.name);
     recent.set(cid, Date.now());
   });
 
@@ -276,7 +281,7 @@ io.on('connection', (socket) => {
     // Only announce leaving if they don't come back quickly.
     setTimeout(() => {
       const back = [...users.values()].some((u) => u.clientId === user.clientId);
-      if (!back) system(`${user.name} left`);
+      if (!back) system(`${user.name} left`, user.name);
     }, 15_000);
     if (users.size === 0 && room.playing) { room.time = position(); room.playing = false; room.updatedAt = Date.now(); }
     checkBuffering();

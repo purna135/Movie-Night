@@ -271,6 +271,18 @@ io.on('connection', (socket) => {
     if (users.get(to)?.voice && users.get(socket.id)?.voice) io.to(to).emit('signal', { from: socket.id, data });
   });
 
+  // Voice relay: used when a direct phone-to-phone (WebRTC) connection can't be made, e.g. behind
+  // mobile-carrier NATs. Small compressed audio packets (~40 ms each) are forwarded to the listed
+  // friends over the same connection that already carries chat. "volatile" = drop rather than queue
+  // on a congested link, so voice never lags further and further behind.
+  socket.on('vr', (pkt) => {
+    if (!users.get(socket.id)?.voice || !pkt || !pkt.d || !Array.isArray(pkt.to)) return;
+    if (pkt.d.byteLength > 2048) return;
+    for (const id of pkt.to.slice(0, 8)) {
+      if (id !== socket.id && users.get(id)?.voice) io.to(id).volatile.emit('vr', { from: socket.id, d: pkt.d });
+    }
+  });
+
   socket.on('disconnect', () => {
     const user = users.get(socket.id);
     if (!user) return;

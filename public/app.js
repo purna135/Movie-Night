@@ -182,7 +182,12 @@
     socket.on('typing', ({ name }) => showTyping(name));
     socket.on('react', (r) => floatEmoji(r));
     socket.on('voice-peers', (ids) => ids.forEach((id) => callPeer(id)));
-    socket.on('voice-left', (id) => closePeer(id));
+    socket.on('voice-left', (id) => { closePeer(id); dropRelay(id); renderPeople(); });
+    socket.on('vr', ({ from, d }) => {
+      if (!voice.active) return;
+      if (!relay.peers.has(from)) goRelay(from, false); // friend is sending through the server
+      playRelay(from, d);
+    });
     socket.on('signal', ({ from, data }) => onSignal(from, data));
   }
 
@@ -1041,6 +1046,7 @@
           <div class="person-sub">
             <span class="pill ${esc(u.status)}">${statusText[u.status] || u.status}</span>
             ${u.quality ? `<span class="pill">${esc(u.quality)}</span>` : ''}
+            ${voice.active && u.voice && me && u.id !== me.id ? (() => { const m = voiceMode(u.id); return `<span class="pill ${m === 'Connecting…' ? 'buffering' : 'playing'}">🎙 ${m}</span>`; })() : ''}
           </div>
         </div>
         <div class="person-voice ${voiceCls}" title="${u.voice ? (u.muted ? 'Muted' : 'In voice') : 'Not in voice'}">${svg(voiceIcon)}</div>
@@ -1114,7 +1120,12 @@
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
       });
     } catch (err) {
-      toast(err.name === 'NotAllowedError' ? '🎙  Microphone permission was blocked' : 'Couldn’t access the microphone');
+      const msg = {
+        NotAllowedError: '🎙  Microphone permission is blocked — allow it in the browser’s site settings',
+        NotReadableError: '🎙  Microphone is busy — end other calls (WhatsApp, Instagram…) and try again',
+        NotFoundError: '🎙  No microphone found',
+      }[err.name] || 'Couldn’t access the microphone';
+      toast(msg);
       return;
     }
     voice.active = true;
@@ -1128,6 +1139,7 @@
 
   function rejoinVoice() {
     [...voice.peers.keys()].forEach(closePeer);
+    resetRelay(); // everyone's connection ids changed after a reconnect
     socket.emit('voice-join');
     if (voice.muted) socket.emit('voice-mute', { muted: true });
   }
@@ -1139,6 +1151,7 @@
 
   function teardownVoice() {
     [...voice.peers.keys()].forEach(closePeer);
+    resetRelay();
     voice.stream?.getTracks().forEach((t) => t.stop());
     voice.stream = null;
     voice.active = false;
@@ -1188,9 +1201,16 @@
       peer.audio = a;
       addMeter(id, e.streams[0]);
     };
+    // If a direct connection isn't up within 8 s (blocked NAT / strict network), use the server relay.
+    peer.timer = setTimeout(() => {
+      if (voice.peers.get(id) === peer && pc.connectionState !== 'connected') goRelay(id);
+    }, 8000);
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
+      renderPeople();
       if (st === 'connected') {
+        clearTimeout(peer.timer);
+        clearTimeout(peer.dcTimer);
         peer.retries = 0;
         // Voice stays light so the movie keeps most of the bandwidth.
         pc.getSenders().forEach((s) => {
@@ -1201,22 +1221,21 @@
           s.setParameters(p).catch(() => {});
         });
       }
-      if (st === 'failed') {
-        const name = users.find((u) => u.id === id)?.name || 'your friend';
-        if (peer.initiator && peer.retries < 3 && voice.active) {
-          const retries = peer.retries + 1;
-          closePeer(id);
-          setTimeout(() => { if (voice.active) { callPeer(id); const p2 = voice.peers.get(id); if (p2) p2.retries = retries; } }, 1200);
-        } else if (peer.retries >= 3 || !peer.initiator) {
-          toast(`Voice can’t reach ${name} directly — see README for a TURN server`);
-        }
+      // Direct connection broke (network changed, NAT timeout): give it a few seconds, then relay.
+      if (st === 'disconnected') {
+        clearTimeout(peer.dcTimer);
+        peer.dcTimer = setTimeout(() => {
+          if (voice.peers.get(id) === peer && pc.connectionState !== 'connected') goRelay(id);
+        }, 5000);
       }
+      if (st === 'failed') goRelay(id);
     };
     return peer;
   }
 
   function callPeer(id) {
-    if (!voice.active || voice.peers.has(id)) return;
+    if (!voice.active || voice.peers.has(id) || relay.peers.has(id)) return;
+    if (forceRelay()) return goRelay(id);
     const peer = makePeer(id, true);
     peer.chain = peer.chain.then(async () => {
       await peer.pc.setLocalDescription(await peer.pc.createOffer());
@@ -1226,6 +1245,9 @@
 
   function onSignal(from, data) {
     if (!voice.active) return;
+    if (data && data.relay) return goRelay(from, false); // friend switched us to the server relay
+    if (relay.peers.has(from)) return;                   // already relaying with this friend
+    if (forceRelay() && data.sdp?.type === 'offer') return goRelay(from);
     let peer = voice.peers.get(from);
     if (data.sdp?.type === 'offer' && peer) { closePeer(from); peer = null; }
     if (!peer) {
@@ -1249,10 +1271,215 @@
     const peer = voice.peers.get(id);
     if (!peer) return;
     voice.peers.delete(id);
+    clearTimeout(peer.timer);
+    clearTimeout(peer.dcTimer);
     try { peer.pc.close(); } catch {}
     if (peer.audio) { peer.audio.srcObject = null; peer.audio.remove(); }
     voice.meters.delete(id);
     setSpeaking(id, false);
+  }
+
+  // ---------- Voice relay (fallback through our own server) ----------
+  // Direct phone-to-phone WebRTC is blocked on some networks (e.g. mobile-carrier NATs), which made
+  // voice work "sometimes". When the direct connection doesn't come up, voice for that friend goes
+  // through the Movie Night server instead — over the same tunnel that already carries video and
+  // chat, so it connects whenever the app works. 16 kHz mono IMA-ADPCM (~64 kbps), sent only while
+  // you're speaking; ~150 ms jitter buffer on the receiving side.
+  const RELAY_RATE = 16000;
+  const FRAME = 640; // 40 ms at 16 kHz
+  const relay = { peers: new Set(), capture: null, sink: new Map(), lastVoice: 0, warned: false, pred: 0, index: 0 };
+  const forceRelay = () => store.get('voiceRelay', false) === true; // debug: localStorage 'mn:voiceRelay' = true
+
+  const ADPCM_INDEX = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
+  const ADPCM_STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73,
+    80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724,
+    796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
+    5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623,
+    27086, 29794, 32767];
+  const clamp16 = (v) => (v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+
+  // Each packet starts with the encoder state, so every packet decodes on its own (a lost packet is just a gap).
+  function adpcmEncode(pcm) {
+    const out = new Uint8Array(4 + (pcm.length >> 1));
+    let pred = relay.pred, index = relay.index;
+    out[0] = pred & 0xff; out[1] = (pred >> 8) & 0xff; out[2] = index;
+    for (let i = 0; i < pcm.length; i++) {
+      const step = ADPCM_STEP[index];
+      let diff = pcm[i] - pred, code = 0, delta = step >> 3;
+      if (diff < 0) { code = 8; diff = -diff; }
+      if (diff >= step) { code |= 4; diff -= step; delta += step; }
+      if (diff >= step >> 1) { code |= 2; diff -= step >> 1; delta += step >> 1; }
+      if (diff >= step >> 2) { code |= 1; delta += step >> 2; }
+      pred = clamp16(code & 8 ? pred - delta : pred + delta);
+      index = Math.min(88, Math.max(0, index + ADPCM_INDEX[code]));
+      if (i & 1) out[4 + (i >> 1)] |= code << 4; else out[4 + (i >> 1)] = code;
+    }
+    relay.pred = pred; relay.index = index;
+    return out;
+  }
+  function adpcmDecode(bytes) {
+    const n = (bytes.length - 4) * 2;
+    const out = new Float32Array(n);
+    let pred = ((bytes[0] | (bytes[1] << 8)) << 16) >> 16;
+    let index = Math.min(88, bytes[2]);
+    for (let i = 0; i < n; i++) {
+      const b = bytes[4 + (i >> 1)];
+      const code = i & 1 ? b >> 4 : b & 15;
+      const step = ADPCM_STEP[index];
+      let delta = step >> 3;
+      if (code & 4) delta += step;
+      if (code & 2) delta += step >> 1;
+      if (code & 1) delta += step >> 2;
+      pred = clamp16(code & 8 ? pred - delta : pred + delta);
+      index = Math.min(88, Math.max(0, index + ADPCM_INDEX[code]));
+      out[i] = pred / 32768;
+    }
+    return out;
+  }
+
+  const CAPTURE_WORKLET = `class MnCapture extends AudioWorkletProcessor {
+    constructor() { super(); this.buf = new Float32Array(1024); this.n = 0; }
+    process(inputs) {
+      const ch = inputs[0] && inputs[0][0];
+      if (ch) for (let i = 0; i < ch.length; i++) {
+        this.buf[this.n++] = ch[i];
+        if (this.n === this.buf.length) { this.port.postMessage(this.buf.slice(0)); this.n = 0; }
+      }
+      return true;
+    }
+  }
+  registerProcessor('mn-capture', MnCapture);`;
+
+  async function startRelayCapture() {
+    if (relay.capture || !voice.ctx || !voice.stream) return;
+    const ctx = voice.ctx;
+    const cap = { src: ctx.createMediaStreamSource(voice.stream), node: null, mute: ctx.createGain() };
+    relay.capture = cap;
+    cap.mute.gain.value = 0; // keep the node pulled by the graph without making any sound
+    cap.mute.connect(ctx.destination);
+    const ratio = ctx.sampleRate / RELAY_RATE;
+    let frame = new Float32Array(FRAME), fill = 0, pos = 0, prev = 0;
+    const onSamples = (input) => {
+      // Resample to 16 kHz (linear interpolation; `prev` carries the last sample across chunks).
+      while (pos < input.length) {
+        const i = Math.floor(pos), f = pos - i;
+        const a = i === 0 ? prev : input[i - 1];
+        const b = input[i];
+        frame[fill++] = a + (b - a) * f;
+        if (fill === FRAME) { sendRelayFrame(frame); frame = new Float32Array(FRAME); fill = 0; }
+        pos += ratio;
+      }
+      pos -= input.length;
+      prev = input[input.length - 1];
+    };
+    try {
+      if (!ctx.audioWorklet) throw new Error('no worklet');
+      const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: 'application/javascript' }));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      if (relay.capture !== cap) return; // voice was left meanwhile
+      cap.node = new AudioWorkletNode(ctx, 'mn-capture');
+      cap.node.port.onmessage = (e) => onSamples(e.data);
+    } catch {
+      cap.node = ctx.createScriptProcessor(2048, 1, 1); // older browsers
+      cap.node.onaudioprocess = (e) => onSamples(e.inputBuffer.getChannelData(0));
+    }
+    cap.src.connect(cap.node);
+    cap.node.connect(cap.mute);
+  }
+
+  function stopRelayCapture() {
+    const cap = relay.capture;
+    relay.capture = null;
+    if (!cap) return;
+    try { cap.src.disconnect(); cap.node?.disconnect(); cap.mute.disconnect(); } catch {}
+    if (cap.node?.port) cap.node.port.onmessage = null;
+  }
+
+  function sendRelayFrame(f32) {
+    if (voice.muted || !relay.peers.size || !socket?.connected) return;
+    let sum = 0;
+    for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
+    const now = performance.now();
+    if (Math.sqrt(sum / f32.length) > 0.008) relay.lastVoice = now;
+    if (now - relay.lastVoice > 600) return; // silence: send nothing
+    const pcm = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) pcm[i] = clamp16(Math.round(f32[i] * 32767));
+    socket.volatile.emit('vr', { to: [...relay.peers], d: adpcmEncode(pcm).buffer });
+  }
+
+  function playRelay(from, data) {
+    const ctx = voice.ctx;
+    if (!ctx || !data) return;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    let s = relay.sink.get(from);
+    if (!s) {
+      const gain = ctx.createGain();
+      const an = ctx.createAnalyser();
+      an.fftSize = 512;
+      gain.connect(ctx.destination);
+      gain.connect(an);
+      s = { gain, next: 0 };
+      relay.sink.set(from, s);
+      voice.meters.set(from, { an, buf: new Uint8Array(an.fftSize), on: false, last: 0 }); // speaking ring + movie ducking
+    }
+    const f32 = adpcmDecode(new Uint8Array(data));
+    let ab;
+    try {
+      ab = ctx.createBuffer(1, f32.length, RELAY_RATE);
+      ab.copyToChannel(f32, 0);
+    } catch { // some browsers refuse 16 kHz buffers — upsample to the context rate
+      const r = ctx.sampleRate / RELAY_RATE, n = Math.round(f32.length * r), up = new Float32Array(n);
+      for (let j = 0; j < n; j++) {
+        const x = j / r, i = Math.floor(x), f = x - i;
+        up[j] = f32[i] * (1 - f) + (f32[Math.min(i + 1, f32.length - 1)]) * f;
+      }
+      ab = ctx.createBuffer(1, n, ctx.sampleRate);
+      ab.copyToChannel(up, 0);
+    }
+    const now = ctx.currentTime;
+    // Jitter buffer: start ~150 ms ahead; if we fell behind or drifted too far ahead, re-anchor.
+    if (s.next < now + 0.02 || s.next > now + 0.6) s.next = now + 0.15;
+    const node = ctx.createBufferSource();
+    node.buffer = ab;
+    node.connect(s.gain);
+    node.start(s.next);
+    s.next += ab.duration;
+  }
+
+  function goRelay(id, tellPeer = true) {
+    if (!voice.active || relay.peers.has(id)) return;
+    closePeer(id);
+    relay.peers.add(id);
+    if (tellPeer) socket.emit('signal', { to: id, data: { relay: true } });
+    startRelayCapture();
+    renderPeople();
+    if (!relay.warned) {
+      relay.warned = true;
+      toast('🎧  Voice connected through the server');
+    }
+  }
+
+  function dropRelay(id) {
+    relay.peers.delete(id);
+    const s = relay.sink.get(id);
+    if (s) { try { s.gain.disconnect(); } catch {} relay.sink.delete(id); }
+    voice.meters.delete(id);
+    setSpeaking(id, false);
+    if (!relay.peers.size) stopRelayCapture();
+  }
+
+  function resetRelay() {
+    [...relay.peers].forEach(dropRelay);
+    stopRelayCapture();
+    relay.warned = false;
+  }
+
+  // Shown next to each friend in People while you're in voice.
+  function voiceMode(id) {
+    if (relay.peers.has(id)) return 'Via server';
+    const p = voice.peers.get(id);
+    return p && p.pc.connectionState === 'connected' ? 'Direct' : 'Connecting…';
   }
 
   // Speaking indicators + auto-lower the movie while friends talk

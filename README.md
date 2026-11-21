@@ -105,7 +105,7 @@ Send both to your friends. Keep the terminal open while you watch; `Ctrl+C` stop
 | ⏳ **Wait for everyone** | If someone's connection stalls, the room pauses at *their* position and resumes automatically when they catch up. |
 | 📶 **Adaptive quality** | Each viewer gets the best quality their connection can sustain and switches as it changes — or picks one manually. |
 | 💬 **Chat & reactions** | Grouped chat bubbles, typing indicator, floating emoji reactions. In full screen, new messages pop up over the video. |
-| 🎙️ **Voice chat** | Peer-to-peer, echo-cancelled, ~32 kbps so the movie keeps the bandwidth. The movie volume dips while a friend talks. |
+| 🎙️ **Voice chat** | Direct phone-to-phone when the network allows; otherwise it **automatically switches to relaying through your PC** (within ~8 s), so it connects on any network the app works on. Light on data, echo-cancelled, movie volume dips while a friend talks. People tab shows *Direct* / *Via server*. |
 | 💬 **Subtitles** | `Film.srt` next to `Film.mp4` just works; text subtitles inside MKVs are extracted by `optimize`. Rendered big and readable on every device. |
 | 📱 **Phone-first UI** | Portrait: video + chat. Landscape: full-screen video with chat beside it. Double-tap sides to skip, screen stays awake, chat box stays above the keyboard. |
 | 🖥️ **Desktop too** | Side-by-side layout and shortcuts: `Space` play/pause · `←/→` ±10 s · `F` full screen · `M` mute mic · `C` chat. |
@@ -124,14 +124,17 @@ flowchart LR
   S <-->|cloudflared tunnel<br/>https + wss| CF((Cloudflare))
   CF <--> A[📱 Friend A]
   CF <--> B[📱 Friend B]
-  A <-.->|WebRTC voice<br/>peer-to-peer| B
+  A <-.->|voice: direct WebRTC<br/>or relayed via server| B
 ```
 
 - **Video** is served as [HLS](https://en.wikipedia.org/wiki/HTTP_Live_Streaming) in 4-second chunks. Browsers use
   [hls.js](https://github.com/video-dev/hls.js) (iPhones use native HLS) to pick a quality per chunk.
 - **Sync**: the server is the single source of truth for *movie, playing, position*. Clients estimate the
   server clock offset and continuously compare where they are with where the room is.
-- **Voice** goes directly between phones (WebRTC); the server only relays the handshake.
+- **Voice** tries a direct WebRTC connection first (best quality, lowest delay). Many mobile carriers block
+  direct connections, so if it isn't up within ~8 s — or drops later — voice for that friend is relayed
+  through the Movie Night server over the same tunnel as chat: 16 kHz mono IMA-ADPCM (~65 kbps, only
+  while someone is speaking) with a small jitter buffer.
 
 ## Slow networks
 
@@ -185,10 +188,14 @@ then tap ↻ in the **Movies** tab — the app switches to the optimized version
 </details>
 
 <details>
-<summary><b>Voice says it can't reach my friend</b></summary>
+<summary><b>Voice doesn't work or cuts out</b></summary>
 
-Some mobile carriers block direct peer-to-peer connections. Add a TURN relay (e.g. the free tier at
-metered.ca) via `TURN_URL`, `TURN_USER`, `TURN_PASS` and restart.
+- **"Microphone is busy"** — another app has the mic. Android lets only one app record at a time, so end any
+  WhatsApp / Instagram / phone call first.
+- **Stuck on "Connecting…"** — wait ~8 s: if the direct connection is blocked it switches to *Via server* by itself.
+- Voice through the server is a bit lower quality than direct. For direct quality on strict networks you can add
+  your own TURN relay via `TURN_URL`, `TURN_USER`, `TURN_PASS` (optional).
+- Use earphones so the movie doesn't echo into your mic.
 </details>
 
 <details>

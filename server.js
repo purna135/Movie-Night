@@ -4,7 +4,18 @@
 //   npm start -- "D:\Movies\x.mkv"  -> serve that folder and pre-select the file
 //   npm run local                   -> no tunnel (same Wi-Fi testing only)
 //   npm run optimize                -> build low-network adaptive versions (needs ffmpeg)
-// Env: PORT, PASSCODE, TURN_URL, TURN_USER, TURN_PASS
+// Env (or a .env file next to this script): PORT, PASSCODE, TURN_URL, TURN_USER, TURN_PASS
+
+// Minimal .env loader (KEY=VALUE per line, # comments); real environment variables win.
+try {
+  const envFile = require('path').join(__dirname, '.env');
+  for (const line of require('fs').readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/i);
+    if (m && !line.trim().startsWith('#') && process.env[m[1]] === undefined) {
+      process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+    }
+  }
+} catch {}
 
 const express = require('express');
 const compression = require('compression');
@@ -28,9 +39,14 @@ const COOKIE = 'mn_session';
 
 const movies = () => lib.listMovies(MOVIES_DIR);
 
+// STUN finds a direct path; TURN (optional, e.g. metered.ca / Cloudflare / your own coturn) relays
+// voice when direct is blocked. TURN_URL may list several addresses separated by commas, e.g.
+// "turn:global.relay.metered.ca:80,turn:global.relay.metered.ca:443?transport=tcp,turns:global.relay.metered.ca:443".
+// Without TURN, voice falls back to the built-in relay through this server.
 const iceServers = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
-if (process.env.TURN_URL) {
-  iceServers.push({ urls: process.env.TURN_URL, username: process.env.TURN_USER, credential: process.env.TURN_PASS });
+const TURN_URLS = String(process.env.TURN_URL || '').split(',').map((s) => s.trim()).filter(Boolean);
+if (TURN_URLS.length) {
+  iceServers.push({ urls: TURN_URLS, username: process.env.TURN_USER, credential: process.env.TURN_PASS });
 }
 
 // ---------- HTTP ----------
@@ -348,6 +364,7 @@ function banner(url) {
   console.log('');
   console.log(`  (Passcode ${PASSCODE} is already inside the link — they just enter their name.)`);
   console.log(`  Movies:    ${list.length} in ${MOVIES_DIR}`);
+  console.log(`  Voice:     direct + ${TURN_URLS.length ? `TURN relay ✓ (${TURN_URLS.length} address${TURN_URLS.length > 1 ? 'es' : ''})` : 'built-in relay (add TURN in .env for better quality — see README)'}`);
   const slow = list.filter((m) => !m.hls);
   if (slow.length) console.log(`  Tip:       ${slow.length} not optimized for slow networks — run: npm run optimize`);
   console.log(`└${line}┘\n`);

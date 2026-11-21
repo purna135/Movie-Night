@@ -36,6 +36,7 @@ Works on phones and desktops, and keeps playing smoothly on slow connections.
 - [Features](#features)
 - [How it works](#how-it-works)
 - [Slow networks](#slow-networks)
+- [Voice quality: built-in relay vs TURN](#voice-quality-built-in-relay-vs-turn)
 - [Commands & options](#commands--options)
 - [Troubleshooting](#troubleshooting)
 - [Project structure](#project-structure)
@@ -161,6 +162,47 @@ Stream ladder produced by `optimize` (video + audio):
 > **Your upload speed is shared by everyone.** Two viewers at 720p need ~6 Mbps upload from your PC;
 > on less, viewers automatically settle at 480p/360p. A wired connection on the PC helps a lot.
 
+## Voice quality: built-in relay vs TURN
+
+Voice always tries the best path first and falls back automatically:
+
+```
+1. Direct (phone ↔ phone)        best quality, lowest delay      — works on most Wi-Fi
+2. TURN relay (optional)         near-direct quality             — if you add one in .env
+3. Built-in relay (your PC)      good quality, zero setup        — always works if the app works
+```
+
+The **People** tab shows which one each friend is on: 🎙 *Direct*, 🎙 *Via TURN* or 🎙 *Via server*.
+
+| | Built-in relay (default fallback) | TURN relay (optional) |
+|---|---|---|
+| Setup | none | free account + 3 values in `.env` |
+| Codec | 16 kHz ADPCM, ~65 kbps | Opus, ~32 kbps (WebRTC) |
+| Delay | ~250–400 ms | ~100–200 ms |
+| Weak / lossy mobile signal | can stutter (rides the TCP tunnel) | smooth (UDP, jitter buffer, loss concealment) |
+| Uses your PC's upload | a little | no |
+
+**Recommendation:** the built-in relay is fine for chatting during a movie. If you or your friends are often on
+mobile data and want call-quality voice, add a TURN relay — it takes about 5 minutes:
+
+1. Create a free TURN account. **[Metered](https://www.metered.ca/stun-turn)** is the simplest (fixed
+   username/password in its dashboard). Alternatives: **[Cloudflare Realtime TURN](https://developers.cloudflare.com/realtime/turn/)**
+   (credentials are generated through its API and expire, so you'd refresh them) or your own
+   **[coturn](https://github.com/coturn/coturn)** on any small VPS.
+2. Copy **`.env.example`** to **`.env`** in the project folder and fill in the values from the provider's dashboard.
+   List every address they give you, comma-separated (UDP, TCP and TLS/443 ones — the 443 one gets through
+   strict networks):
+   ```ini
+   TURN_URL=turn:global.relay.metered.ca:80,turn:global.relay.metered.ca:443?transport=tcp,turns:global.relay.metered.ca:443?transport=tcp
+   TURN_USER=your-username
+   TURN_PASS=your-credential
+   ```
+3. Restart `npm start`. The banner shows **`Voice: direct + TURN relay ✓`**. When a friend is relayed you'll see
+   *Via TURN* in the People tab.
+
+> Free tiers have monthly data limits; voice uses roughly 15 MB per person per hour. `.env` is git-ignored, so your
+> credentials are never committed.
+
 ## Commands & options
 
 | Command | What it does |
@@ -173,13 +215,15 @@ Stream ladder produced by `optimize` (video + audio):
 | `npm run optimize -- --force` | Re-do movies that were already prepared |
 | `npm run optimize -- --cpu` | Skip GPU encoders (use if a GPU encode fails) |
 
-Environment variables (set in PowerShell before `npm start`, e.g. `$env:PASSCODE="246810"`):
+Settings go in a **`.env`** file in the project folder (copy `.env.example`), or as environment variables
+(`$env:PASSCODE="246810"` in PowerShell before `npm start`):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PASSCODE` | random 6 digits | Keep the same passcode across restarts |
+| `PASSCODE` | random 6 digits | Keep the same passcode (and share link) across restarts |
 | `PORT` | `8787` (next free) | Local port |
-| `TURN_URL`, `TURN_USER`, `TURN_PASS` | — | TURN relay for voice on strict networks |
+| `TURN_URL` | — | TURN address(es), comma-separated — see [Voice quality](#voice-quality-built-in-relay-vs-turn) |
+| `TURN_USER`, `TURN_PASS` | — | TURN credentials |
 
 ## Troubleshooting
 
@@ -196,8 +240,10 @@ then tap ↻ in the **Movies** tab — the app switches to the optimized version
 - **"Microphone is busy"** — another app has the mic. Android lets only one app record at a time, so end any
   WhatsApp / Instagram / phone call first.
 - **Stuck on "Connecting…"** — wait ~8 s: if the direct connection is blocked it switches to *Via server* by itself.
-- Voice through the server is a bit lower quality than direct. For direct quality on strict networks you can add
-  your own TURN relay via `TURN_URL`, `TURN_USER`, `TURN_PASS` (optional).
+- Voice *Via server* is a bit lower quality and can stutter on a weak signal. For near-direct quality add a
+  TURN relay — see [Voice quality](#voice-quality-built-in-relay-vs-turn).
+- Added TURN but still see *Via server*? Check the banner says `TURN relay ✓`, and that the username/password
+  are current (some providers rotate them).
 - Use earphones so the movie doesn't echo into your mic.
 </details>
 

@@ -1227,6 +1227,16 @@
         clearTimeout(peer.timer);
         clearTimeout(peer.dcTimer);
         peer.retries = 0;
+        // Find out whether the call goes phone-to-phone or through a TURN relay (shown in People).
+        pc.getStats().then((stats) => {
+          let pair = null;
+          stats.forEach((s) => { if (s.type === 'transport' && s.selectedCandidatePairId) pair = stats.get(s.selectedCandidatePairId); });
+          if (!pair) stats.forEach((s) => { if (s.type === 'candidate-pair' && s.state === 'succeeded' && (s.nominated || s.selected)) pair = s; });
+          const local = pair && stats.get(pair.localCandidateId);
+          const remote = pair && stats.get(pair.remoteCandidateId);
+          peer.route = local?.candidateType === 'relay' || remote?.candidateType === 'relay' ? 'turn' : 'direct';
+          renderPeople();
+        }).catch(() => {});
         // Voice stays light so the movie keeps most of the bandwidth.
         pc.getSenders().forEach((s) => {
           if (s.track?.kind !== 'audio') return;
@@ -1494,7 +1504,8 @@
   function voiceMode(id) {
     if (relay.peers.has(id)) return 'Via server';
     const p = voice.peers.get(id);
-    return p && p.pc.connectionState === 'connected' ? 'Direct' : 'Connecting…';
+    if (!p || p.pc.connectionState !== 'connected') return 'Connecting…';
+    return p.route === 'turn' ? 'Via TURN' : 'Direct';
   }
 
   // Speaking indicators + auto-lower the movie while friends talk
